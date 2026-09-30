@@ -22,35 +22,6 @@ namespace rf::ui
             g.drawRect (bounds, theme::metric::borderWidth);
         }
 
-        /** A small open chevron, drawn with square line ends so it stays crisp. */
-        void drawChevron (juce::Graphics& g, juce::Point<float> centre, float halfWidth,
-                          bool pointsDown, juce::Colour c)
-        {
-            const auto halfHeight = halfWidth * 0.5f;
-            const auto dir = pointsDown ? 1.0f : -1.0f;
-
-            juce::Path p;
-            p.startNewSubPath (centre.x - halfWidth, centre.y - dir * halfHeight);
-            p.lineTo (centre.x, centre.y + dir * halfHeight);
-            p.lineTo (centre.x + halfWidth, centre.y - dir * halfHeight);
-
-            g.setColour (c);
-            g.strokePath (p, juce::PathStrokeType (1.0f, juce::PathStrokeType::mitered, juce::PathStrokeType::square));
-        }
-
-        void drawRightChevron (juce::Graphics& g, juce::Point<float> centre, float halfHeight, juce::Colour c)
-        {
-            const auto halfWidth = halfHeight * 0.5f;
-
-            juce::Path p;
-            p.startNewSubPath (centre.x - halfWidth, centre.y - halfHeight);
-            p.lineTo (centre.x + halfWidth, centre.y);
-            p.lineTo (centre.x - halfWidth, centre.y + halfHeight);
-
-            g.setColour (c);
-            g.strokePath (p, juce::PathStrokeType (1.0f, juce::PathStrokeType::mitered, juce::PathStrokeType::square));
-        }
-
         juce::TextLayout layoutTooltip (const juce::String& text, juce::Colour c)
         {
             juce::AttributedString s;
@@ -61,6 +32,44 @@ namespace rf::ui
             layout.createLayoutWithBalancedLineLengths (s, (float) tooltipMaxWidth);
             return layout;
         }
+    }
+
+    //==============================================================================
+    void drawChevron (juce::Graphics& g, juce::Point<float> centre, float halfWidth,
+                      bool pointsDown, juce::Colour c)
+    {
+        const auto halfHeight = halfWidth * 0.5f;
+        const auto dir = pointsDown ? 1.0f : -1.0f;
+
+        juce::Path p;
+        p.startNewSubPath (centre.x - halfWidth, centre.y - dir * halfHeight);
+        p.lineTo (centre.x, centre.y + dir * halfHeight);
+        p.lineTo (centre.x + halfWidth, centre.y - dir * halfHeight);
+
+        g.setColour (c);
+        g.strokePath (p, juce::PathStrokeType (1.0f, juce::PathStrokeType::mitered, juce::PathStrokeType::square));
+    }
+
+    void drawRightChevron (juce::Graphics& g, juce::Point<float> centre, float halfHeight, juce::Colour c)
+    {
+        const auto halfWidth = halfHeight * 0.5f;
+
+        juce::Path p;
+        p.startNewSubPath (centre.x - halfWidth, centre.y - halfHeight);
+        p.lineTo (centre.x + halfWidth, centre.y);
+        p.lineTo (centre.x - halfWidth, centre.y + halfHeight);
+
+        g.setColour (c);
+        g.strokePath (p, juce::PathStrokeType (1.0f, juce::PathStrokeType::mitered, juce::PathStrokeType::square));
+    }
+
+    void drawBadge (juce::Graphics& g, juce::Rectangle<float> area, const juce::String& glyph, juce::Colour fill)
+    {
+        g.setColour (fill);
+        g.fillRect (area);
+        g.setColour (colour::bg);
+        g.setFont (Fonts::mono (area.getHeight() * 0.8f, FontWeight::bold));
+        g.drawText (glyph, area, juce::Justification::centred, false);
     }
 
     //==============================================================================

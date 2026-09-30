@@ -4,8 +4,8 @@
 
 namespace rf::ui
 {
-    /*  The four sidebar sections. Phase 1: representative placeholder controls only, so the
-        look-and-feel can be judged. Nothing is connected to settings or the engine yet.
+    /*  The four sidebar sections. Apart from "Include subfolders" (phase 2) the controls are
+        still placeholders; they are connected to settings and the engine in phases 3 and 4.
     */
 
     class AudioSection final : public SidebarSection
@@ -45,6 +45,9 @@ namespace rf::ui
     {
     public:
         OptionsSection();
+
+        /** "Include subfolders" (persisted by the app through its onClick). */
+        juce::ToggleButton& getIncludeSubfoldersToggle() noexcept   { return includeSubfolders; }
 
     private:
         juce::ToggleButton includeSubfolders { "Include subfolders" };

@@ -22,6 +22,16 @@ namespace rf::ui
     void drawSectionLabel (juce::Graphics&, const juce::String& text, juce::Rectangle<int> area,
                            juce::Justification = juce::Justification::centredLeft);
 
+    /** A small open chevron (down or up) with square line ends, as used by combo boxes. */
+    void drawChevron (juce::Graphics&, juce::Point<float> centre, float halfWidth, bool pointsDown, juce::Colour);
+
+    /** A small open chevron pointing right, as used for submenus and collapsed groups. */
+    void drawRightChevron (juce::Graphics&, juce::Point<float> centre, float halfHeight, juce::Colour);
+
+    /** A filled square with a black glyph in it (e.g. "!"), used next to warnings and errors so
+        they are not signalled by colour alone. */
+    void drawBadge (juce::Graphics&, juce::Rectangle<float> area, const juce::String& glyph, juce::Colour fill);
+
     //==============================================================================
     /*  The app-wide LookAndFeel: terminal-inspired, black, sharp-cornered, 1 px borders,
         no gradients and no shadows. All colours come from Theme.h.

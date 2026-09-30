@@ -70,6 +70,14 @@ juce_add_binary_data(ReampForgeAssets
 set_target_properties(ReampForgeAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 #===============================================================================
+# Model sources (no GUI, no audio thread). Compiled into both the app and the tests;
+# JUCE modules are compiled per target, so a shared static library would duplicate them.
+set(REAMPFORGE_MODEL_SOURCES
+    Source/Model/FileItem.cpp
+    Source/Model/FileTree.cpp
+    Source/Model/FolderScanner.cpp)
+
+#===============================================================================
 # Application
 juce_add_gui_app(ReampForge
     PRODUCT_NAME                  "Reamp Forge"
@@ -83,8 +91,10 @@ juce_add_gui_app(ReampForge
 
 target_sources(ReampForge PRIVATE
     Source/Main.cpp
+    Source/App/CommandLine.cpp
     Source/App/MainComponent.cpp
     Source/App/MainWindow.cpp
+    Source/App/Settings.cpp
     Source/App/Snapshot.cpp
     Source/UI/Fonts.cpp
     Source/UI/LookAndFeel.cpp
@@ -94,7 +104,8 @@ target_sources(ReampForge PRIVATE
     Source/UI/SidebarSections.cpp
     Source/UI/Sidebar.cpp
     Source/UI/WaveformPanel.cpp
-    Source/UI/StatusBar.cpp)
+    Source/UI/StatusBar.cpp
+    ${REAMPFORGE_MODEL_SOURCES})
 
 if(APPLE)
     target_sources(ReampForge PRIVATE Source/App/MacAppearance.mm)
@@ -108,8 +119,7 @@ target_compile_definitions(ReampForge PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:ReampForge,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:ReampForge,JUCE_VERSION>")
 
-# The audio modules are linked now so the toolchain is proven for later phases;
-# no engine code exists yet.
+# The audio device module is linked now so the toolchain is proven for phase 3.
 target_link_libraries(ReampForge
     PRIVATE
         ReampForgeAssets
@@ -130,4 +140,48 @@ if(APPLE)
         COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:ReampForge>"
         COMMENT "Ad-hoc signing Reamp Forge.app"
         VERBATIM)
+endif()
+
+#===============================================================================
+# Tests (JUCE UnitTest, run through ctest). See ARCHITECTURE.md, "Tests".
+option(REAMPFORGE_BUILD_TESTS "Build the unit tests" ON)
+
+if(REAMPFORGE_BUILD_TESTS)
+    enable_testing()
+
+    juce_add_console_app(ReampForgeTests
+        PRODUCT_NAME "Reamp Forge Tests")
+
+    target_sources(ReampForgeTests PRIVATE
+        Tests/TestMain.cpp
+        Tests/FileTreeTests.cpp
+        Tests/FolderScannerTests.cpp
+        Tests/FileTreeViewTests.cpp
+        Source/UI/Fonts.cpp
+        Source/UI/LookAndFeel.cpp
+        Source/UI/FileTreeView.cpp
+        ${REAMPFORGE_MODEL_SOURCES})
+
+    target_include_directories(ReampForgeTests PRIVATE Source Tests)
+
+    target_compile_definitions(ReampForgeTests PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0)
+
+    target_link_libraries(ReampForgeTests
+        PRIVATE
+            ReampForgeAssets
+            juce::juce_core
+            juce::juce_events
+            juce::juce_audio_basics
+            juce::juce_audio_formats
+            juce::juce_gui_basics
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags)
+
+    foreach(_rf_category FolderScanner FileTree FileTreeView)
+        add_test(NAME ${_rf_category}
+                 COMMAND ReampForgeTests --category=${_rf_category})
+    endforeach()
 endif()

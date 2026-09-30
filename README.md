@@ -3,8 +3,9 @@
 Batch re-amping of guitar DI tracks through a hardware amp via an audio interface.
 Desktop app, C++20 + JUCE 9.0.3 (fetched automatically), CMake.
 
-Status: **phase 1 (skeleton + theme)**. The window, layout and look-and-feel are in place with
-placeholder content; nothing is functional yet.
+Status: **phase 2 (files + waveform)**. Files and folders can be dropped or added, are scanned
+and listed grouped by folder with multi-select and L/R choice, and the selected file's waveform
+is shown with zoom and an audition start marker. No audio device or processing yet.
 
 ## Requirements
 
@@ -57,6 +58,20 @@ or, to see stdout/stderr in the terminal:
 "build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge"
 ```
 
+To add files or folders at startup (repeatable; folders follow the "Include subfolders" setting):
+
+```sh
+"build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge" --open="$HOME/DI/Session A" --open=take.wav
+```
+
+## Tests
+
+JUCE `UnitTest` cases in `Tests/`, built as `ReampForgeTests` with the app and run through ctest:
+
+```sh
+ctest --test-dir build --output-on-failure
+```
+
 ### UI snapshot (development aid)
 
 The app can render its own window (including open popup menus and tooltips) to a PNG and quit.
@@ -66,7 +81,10 @@ This works without granting the terminal screen-recording permission:
 "build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge" --snapshot="$PWD/docs/phase1.png"
 ```
 
-The native macOS title bar is not part of the snapshot.
+The native macOS title bar is not part of the snapshot. It waits until scans and the waveform
+have finished. Combine it with `--open=` and the development flags `--select=<file name>`
+(repeatable, first one is shown in the waveform panel), `--audition-at=<seconds>` and
+`--view=<start>:<end>` to capture a populated window (see `Source/App/CommandLine.h`).
 
 ## Testing with the built-in mic and speakers
 
@@ -81,15 +99,16 @@ and label it "not sample-synchronized, for testing only". The Info.plist already
 CMakeLists.txt
 Assets/Fonts/     JetBrains Mono + Inter (Regular/Medium/Bold) and their OFL licences
 Source/Main.cpp   application entry point
-Source/App/       main window, root component, macOS appearance, snapshot aid
-Source/UI/        Theme (design tokens), Fonts, LookAndFeel, TopBar, FileTreeView,
+Source/App/       main window, root component, Settings, command line, macOS appearance,
+                  snapshot aid
+Source/UI/        Theme (design tokens), Fonts, Format, LookAndFeel, TopBar, FileTreeView,
                   Sidebar + sections, WaveformPanel, StatusBar
 Source/Engine/    (empty, phases 3-5)
-Source/Model/     (empty, phase 2+)
-Tests/            (empty, phase 2+)
+Source/Model/     FileItem, FileTree, FolderScanner
+Tests/            JUCE UnitTest runner and tests (FolderScanner, FileTree, FileTreeView)
 ```
 
-See `ARCHITECTURE.md` for the planned thread and data-flow design, `PROMPT.md` for the full
+See `ARCHITECTURE.md` for the thread and data-flow design, `PROMPT.md` for the full
 specification, and `docs/PROGRESS.md` for the current status and what comes next.
 
 ## Branches

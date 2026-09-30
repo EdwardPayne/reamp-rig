@@ -10,6 +10,8 @@ namespace rf::ui
     public:
         Sidebar();
 
+        OptionsSection& getOptionsSection() noexcept   { return content.options; }
+
         void paint (juce::Graphics&) override;
         void resized() override;
 
@@ -22,7 +24,6 @@ namespace rf::ui
             int getPreferredHeight() const;
             void resized() override;
 
-        private:
             AudioSection audio;
             SyncSection sync;
             DestinationSection destination;

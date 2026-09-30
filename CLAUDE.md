@@ -17,7 +17,7 @@ and records the result sample-aligned. C++20, JUCE 9, CMake. macOS first, Window
 cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"
 open "build/ReampForge_artefacts/Release/Reamp Forge.app"
-ctest --test-dir build --output-on-failure        # once Tests/ has tests (phase 2+)
+ctest --test-dir build --output-on-failure        # JUCE UnitTest cases in Tests/
 ```
 
 Snapshot the UI without screen-recording permission:
@@ -25,6 +25,9 @@ Snapshot the UI without screen-recording permission:
 ```sh
 "build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge" --snapshot="$PWD/docs/<name>.png"
 ```
+
+Add `--open=<file or folder>` (repeatable) to load files; `--select=`, `--audition-at=` and
+`--view=` set up the rest of the window for a snapshot (`Source/App/CommandLine.h`).
 
 Verify a phase by building **and launching**, not just compiling. Look at a snapshot.
 
