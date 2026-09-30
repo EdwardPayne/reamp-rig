@@ -1,0 +1,16 @@
+# Private notes, not part of the repo
+idea.txt
+
+# Build output
+build/
+cmake-build-*/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+
+# Local tool state
+.claude/settings.local.json
+.DS_Store
+*.swp
+.vscode/
+.idea/
