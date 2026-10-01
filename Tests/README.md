@@ -17,10 +17,18 @@ build/ReampForgeTests_artefacts/Release/ReampForgeTests --category=FolderScanner
 - `DuplexEngineTests.cpp`: audition rendering (channel, gain, start, silence elsewhere) and
   meters, driven through `FakeAudioDevice.h`.
 - `SourceLoaderTests.cpp`: channel decode, peak, resampling alignment, failures.
+- `ResamplerTests.cpp`: lengths, exact positions, error on a test sine (documented in
+  `ARCHITECTURE.md`), round trip, streaming identical to offline.
+- `LoopbackTests.cpp` (category `Loopback`): the end-to-end engine test with
+  `engine::LoopbackTestDevice`: files on disk -> engine -> loop -> writer -> files, exact length and
+  bit-exact for mono/stereo L/R, buffers 64/256/480/1024, delays 0/1/37/256/1000, plus gain, tail,
+  a long delay, 16/32f formats and a resampled take.
+- `TakeTests.cpp`: FIFO overflow, padding, callback gaps, xruns, silence/clip, cancel, failures.
+- `OutputNamingTests.cpp`, `BatchQueueTests.cpp`: naming/destination/collisions and batch order/state.
 
 `FakeAudioDevice.h` is a scriptable `AudioDeviceInterface` (no hardware) whose `render()`
 drives the callback and captures every output channel.
 
-Still to come (PROMPT.md section 7): OutputNaming, SyncMeasurer, the loopback engine test and
-the keyed sync store in the settings round-trip. To add a category, add the file to `ReampForgeTests` and the category
+Still to come (PROMPT.md section 7): SyncMeasurer and the keyed sync store in the settings
+round-trip (phase 5). To add a category, add the file to `ReampForgeTests` and the category
 name to the `foreach` list in `CMakeLists.txt`.

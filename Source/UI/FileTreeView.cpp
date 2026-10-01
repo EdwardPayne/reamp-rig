@@ -52,7 +52,7 @@ namespace rf::ui
             };
 
             c.progress = take (64, metric::sectionPadding);
-            c.status   = take (96, metric::grid);
+            c.status   = take (152, metric::grid);
             c.lr       = take (2 * lrBoxWidth - 1 + 4, metric::sectionPadding);
             c.depth    = take (64, metric::grid);
             c.rate     = take (72, metric::grid);
@@ -106,6 +106,7 @@ namespace rf::ui
         }
 
         juce::Font cellFont()          { return Fonts::mono (type::controlSize); }
+        juce::Font badgeFont()         { return Fonts::mono (9.0f, FontWeight::bold, type::chipTracking); }
         juce::Font columnLabelFont()   { return Fonts::mono (10.0f, FontWeight::regular, 0.12f); }
         juce::Font statusFont()        { return Fonts::mono (10.0f, FontWeight::medium, type::chipTracking); }
     }
@@ -145,6 +146,27 @@ namespace rf::ui
         }
 
         int getPreferredHeight() const   { return (int) rows.size() * rowHeight; }
+
+        void setBatchState (ItemId newCurrent, bool active)
+        {
+            if (newCurrent == currentItem && active == batchActive)
+                return;
+
+            for (auto id : { currentItem, newCurrent })
+                if (const auto index = indexOfItem (id); index >= 0)
+                    repaint (rowBounds (index));
+
+            currentItem = newCurrent;
+            batchActive = active;
+        }
+
+        void repaintItem (ItemId id)
+        {
+            if (const auto index = indexOfItem (id); index >= 0)
+                repaint (rowBounds (index));
+        }
+
+        std::function<void()> onSkipCurrent, onRedoWarnings;
 
         /** Scrolls the enclosing viewport so the item's row is visible. */
         void scrollToItem (ItemId id)
@@ -315,10 +337,29 @@ namespace rf::ui
             if (item == nullptr)
                 return {};
 
-            if (column (layOutColumns (getWidth()).lr, rowBounds (index)).contains (pos))
+            const auto columns = layOutColumns (getWidth());
+
+            if (column (columns.lr, rowBounds (index)).contains (pos))
                 return item->hasChannelChoice()
                          ? "Channel sent to the amp. Applies to all selected stereo files. Keys: L / R."
                          : "Mono file: played as is, no channel choice.";
+
+            if (column (columns.status, rowBounds (index)).contains (pos)
+                || column (columns.progress, rowBounds (index)).contains (pos))
+            {
+                auto tip = model::toString (item->status);
+
+                if (item->note.isNotEmpty())
+                    tip << ": " << item->note;
+
+                if (item->outputFile != juce::File())
+                    tip << "\nWritten to " << item->outputFile.getFullPathName();
+
+                if (item->warnings != 0)
+                    tip << "\nWarnings: " << model::Warning::describeAll (item->warnings, "; ");
+
+                return tip;
+            }
 
             return item->file.getFullPathName()
                    + "\nShift-click: range. Cmd-click: add or remove. Right-click: actions.";
@@ -372,6 +413,7 @@ namespace rf::ui
                         const Columns& columns, bool hovered) const
         {
             const auto selected = tree.isSelected (item.id);
+            const auto isCurrent = item.id == currentItem;
 
             if (selected || hovered)
             {
@@ -379,7 +421,14 @@ namespace rf::ui
                 g.fillRect (area);
             }
 
-            if (selected)
+            if (isCurrent)
+            {
+                // The file being recorded: accent tint over the row, distinct from selection.
+                g.setColour (colour::accent.withAlpha (0.12f));
+                g.fillRect (area);
+            }
+
+            if (selected || isCurrent)
             {
                 g.setColour (colour::accent);
                 g.fillRect (area.withWidth (accentEdgeWidth));
@@ -390,7 +439,7 @@ namespace rf::ui
 
             g.setFont (cellFont());
 
-            g.setColour (selected ? colour::heading : colour::text);
+            g.setColour (selected || isCurrent ? colour::heading : colour::text);
             g.drawText (item.file.getFileName(), column (columns.name, area).withTrimmedRight (metric::grid),
                         juce::Justification::centredLeft, true);
 
@@ -403,8 +452,8 @@ namespace rf::ui
                         juce::Justification::centredLeft, true);
 
             paintChannelSelector (g, item, lrBoxes (columns, area), hoveredChannel (item.id));
-            paintStatus (g, item.status, column (columns.status, area));
-            paintProgress (g, item.progress, column (columns.progress, area));
+            paintStatus (g, item, column (columns.status, area));
+            paintProgress (g, item, column (columns.progress, area));
         }
 
         void paintChannelSelector (juce::Graphics& g, const FileItem& item,
@@ -453,8 +502,9 @@ namespace rf::ui
             }
         }
 
-        static void paintStatus (juce::Graphics& g, FileStatus status, juce::Rectangle<int> area)
+        static void paintStatus (juce::Graphics& g, const FileItem& item, juce::Rectangle<int> area)
         {
+            const auto status = item.status;
             const auto c = statusColour (status);
 
             if (status == FileStatus::error)
@@ -463,18 +513,62 @@ namespace rf::ui
                 area.removeFromLeft (6);
             }
 
+            const auto text = model::toString (status).toUpperCase();
+            const auto font = statusFont();
             g.setColour (c);
-            g.setFont (statusFont());
-            g.drawText (model::toString (status).toUpperCase(), area, juce::Justification::centredLeft, true);
+            g.setFont (font);
+            g.drawText (text, area, juce::Justification::centredLeft, true);
+
+            if (item.warnings == 0)
+                return;
+
+            // Warning badges after the status: outlined warn-coloured tags, "+N" if they do
+            // not all fit. The tooltip spells them out.
+            area.removeFromLeft (juce::GlyphArrangement::getStringWidthInt (font, text) + 6);
+
+            const auto tagFont = badgeFont();
+            int remaining = 0;
+
+            for (auto flag : model::Warning::all)
+                if ((item.warnings & flag) != 0)
+                    ++remaining;
+
+            g.setFont (tagFont);
+
+            for (auto flag : model::Warning::all)
+            {
+                if ((item.warnings & flag) == 0)
+                    continue;
+
+                const auto code = model::Warning::code (flag);
+                const auto width = juce::GlyphArrangement::getStringWidthInt (tagFont, code) + 6;
+                const auto more = "+" + juce::String (remaining);
+                const auto moreWidth = juce::GlyphArrangement::getStringWidthInt (tagFont, more);
+
+                if (width + (remaining > 1 ? moreWidth + 4 : 0) > area.getWidth())
+                {
+                    g.setColour (colour::warn);
+                    g.drawText (more, area, juce::Justification::centredLeft, false);
+                    return;
+                }
+
+                const auto tag = area.removeFromLeft (width).withSizeKeepingCentre (width, 14);
+                g.setColour (colour::warn);
+                g.drawRect (tag, 1);
+                g.drawText (code, tag, juce::Justification::centred, false);
+                area.removeFromLeft (4);
+                --remaining;
+            }
         }
 
-        static void paintProgress (juce::Graphics& g, double progress, juce::Rectangle<int> area)
+        static void paintProgress (juce::Graphics& g, const FileItem& item, juce::Rectangle<int> area)
         {
             const auto bar = area.withSizeKeepingCentre (area.getWidth(), progressHeight);
             g.setColour (colour::lineSoft);
             g.fillRect (bar);
 
-            g.setColour (colour::accent);
+            const auto progress = item.status == FileStatus::done ? 1.0 : item.progress;
+            g.setColour (item.status == FileStatus::done ? colour::ok : colour::accent);
             g.fillRect (bar.withWidth (juce::roundToInt ((double) bar.getWidth() * juce::jlimit (0.0, 1.0, progress))));
         }
 
@@ -588,6 +682,14 @@ namespace rf::ui
                 selectOnly (next);
         }
 
+        /** Reset status of the selection, except the file the batch is recording. */
+        void resetSelected()
+        {
+            auto ids = tree.getSelectedIds();
+            ids.erase (std::remove (ids.begin(), ids.end(), currentItem), ids.end());
+            tree.resetStatus (ids);
+        }
+
         void showContextMenu()
         {
             const auto selected = tree.getSelectedIds();
@@ -616,6 +718,12 @@ namespace rf::ui
             menu.addSeparator();
             menu.addItem (3, "Reset status" + suffix);
 
+            const auto withWarnings = (int) tree.getIdsWithWarnings (model::Warning::redoable).size();
+            menu.addItem (5, "Redo files with warnings" + (withWarnings > 0 ? " (" + juce::String (withWarnings) + ")" : juce::String()),
+                          withWarnings > 0 && ! batchActive);
+            menu.addItem (6, "Skip current file", batchActive && currentItem != 0);
+
+            menu.addSeparator();
             juce::PopupMenu::Item remove ("Remove" + suffix);
             remove.setID (4);
             remove.shortcutKeyDescription = utf8 ("\xe2\x8c\xab"); // ⌫
@@ -634,8 +742,10 @@ namespace rf::ui
                 {
                     case 1: t.setChannelOfSelection (Channel::left);  break;
                     case 2: t.setChannelOfSelection (Channel::right); break;
-                    case 3: t.resetStatusOfSelected();                break;
+                    case 3: safeThis->resetSelected();                break;
                     case 4: safeThis->removeSelected();               break;
+                    case 5: if (safeThis->onRedoWarnings != nullptr) safeThis->onRedoWarnings(); break;
+                    case 6: if (safeThis->onSkipCurrent != nullptr)  safeThis->onSkipCurrent();  break;
                     default: break;
                 }
             });
@@ -688,6 +798,8 @@ namespace rf::ui
         ItemId anchor = 0;
         int hoveredRow = -1;
         juce::Point<int> hoverPos { -1, -1 };
+        ItemId currentItem = 0;
+        bool batchActive = false;
     };
 
     //==============================================================================
@@ -712,6 +824,14 @@ namespace rf::ui
         addFolderButton.setTooltip ("Choose a folder to scan for audio files (see Include subfolders).");
         addFilesButton.onClick  = [this] { if (onAddFiles != nullptr)  onAddFiles(); };
         addFolderButton.onClick = [this] { if (onAddFolder != nullptr) onAddFolder(); };
+
+        setButtonStyle (redoButton, ButtonStyle::secondary);
+        redoButton.setTooltip ("Queue again every file whose take had a dropout, silence or clipping.");
+        redoButton.onClick = [this] { if (onRedoWarnings != nullptr) onRedoWarnings(); };
+        addChildComponent (redoButton);
+
+        rows->onSkipCurrent  = [this] { if (onSkipCurrent != nullptr)  onSkipCurrent(); };
+        rows->onRedoWarnings = [this] { if (onRedoWarnings != nullptr) onRedoWarnings(); };
 
         tree.addListener (this);
         fileTreeChanged();
@@ -742,14 +862,43 @@ namespace rf::ui
         return *rows;
     }
 
+    void FileTreeView::setBatchState (model::ItemId current, bool active)
+    {
+        rows->setBatchState (current, active);
+        batchActive = active;
+        updateRedoButton();
+    }
+
+    void FileTreeView::fileProgressChanged (model::ItemId id)
+    {
+        rows->repaintItem (id);
+    }
+
+    void FileTreeView::updateRedoButton()
+    {
+        const auto show = ! batchActive && ! tree.getIdsWithWarnings (model::Warning::redoable).empty();
+
+        if (show != redoButton.isVisible())
+        {
+            redoButton.setVisible (show);
+            resized();
+            repaint (0, 0, getWidth(), headerHeight);
+        }
+    }
+
     void FileTreeView::fileTreeChanged()
     {
+        updateRedoButton();
         rows->rebuild();
         viewport.setVisible (tree.getNumFiles() > 0);
         updateRowsSize();
 
-        if (tree.getLead() != 0 && tree.isSelected (tree.getLead()))
+        // Scroll to the lead only when it changes, so batch status updates do not pull the
+        // list back while the user looks elsewhere.
+        if (tree.getLead() != scrolledLead && tree.getLead() != 0 && tree.isSelected (tree.getLead()))
             rows->scrollToItem (tree.getLead());
+
+        scrolledLead = tree.getLead();
 
         repaint (0, 0, getWidth(), headerHeight);
 
@@ -791,7 +940,7 @@ namespace rf::ui
         header.reduce (metric::sectionPadding, 0);
         drawSectionLabel (g, "Files", header);
 
-        header.setRight (addFilesButton.getX() - metric::sectionPadding);
+        header.setRight ((redoButton.isVisible() ? redoButton.getX() : addFilesButton.getX()) - metric::sectionPadding);
         g.setColour (colour::muted);
         g.setFont (Fonts::mono (type::fieldLabelSize));
         g.drawText (getCountText(), header, juce::Justification::centredRight, false);
@@ -866,6 +1015,13 @@ namespace rf::ui
         header.removeFromRight (metric::grid);
         addFilesButton.setBounds (header.removeFromRight (buttonWidth (addFilesButton))
                                         .withSizeKeepingCentre (buttonWidth (addFilesButton), headerButtonHeight));
+
+        if (redoButton.isVisible())
+        {
+            header.removeFromRight (metric::grid);
+            redoButton.setBounds (header.removeFromRight (buttonWidth (redoButton))
+                                        .withSizeKeepingCentre (buttonWidth (redoButton), headerButtonHeight));
+        }
 
         viewport.setBounds (getLocalBounds().withTrimmedTop (headerHeight + columnHeaderHeight));
         updateRowsSize();

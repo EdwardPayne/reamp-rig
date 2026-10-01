@@ -190,6 +190,10 @@ namespace rf::engine
         {
             status.inputLatencySamples = setup.inputDeviceName.isNotEmpty() ? device->getInputLatencyInSamples() : 0;
             status.outputLatencySamples = device->getOutputLatencyInSamples();
+
+            // The driver's own count where it has one (WASAPI, ALSA), plus the callbacks
+            // JUCE measured as overrunning their buffer time. CoreAudio has no native count.
+            status.xrunCount = manager.getXRunCount();
         }
 
         return status;

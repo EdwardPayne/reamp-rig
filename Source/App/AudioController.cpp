@@ -336,7 +336,7 @@ namespace rf::app
         // The preview must be at the device rate: reload the lead after a rate change.
         const auto status = device.getStatus();
 
-        if (leadFile != juce::File() && status.isOpen
+        if (! batchActive && leadFile != juce::File() && status.isOpen
             && ! juce::approximatelyEqual (loadedRequest.targetSampleRate, status.config.sampleRate))
         {
             if (duplex.isAuditioning())
@@ -459,6 +459,7 @@ namespace rf::app
         }
 
         deviceWasOpen = status.isOpen;
+        applyBatchLock();
     }
 
     void AudioController::audioDeviceChanged()
@@ -475,6 +476,12 @@ namespace rf::app
             const auto reason = status.lastError.isNotEmpty() ? status.lastError : juce::String ("device disconnected or stopped");
             juce::Logger::writeToLog ("Audio device stopped: " + reason);
             views.statusBar.setMessage ("Audio device stopped: " + reason, Tone::warning);
+            refreshDeviceUi();
+
+            if (onDeviceStopped != nullptr)
+                onDeviceStopped();
+
+            return;
         }
 
         refreshDeviceUi();
@@ -494,6 +501,14 @@ namespace rf::app
 
         leadFile = file;
         leadChannel = channel;
+
+        if (batchActive)
+        {
+            loader.cancel();
+            loaded.reset();
+            loadedRequest = {};
+            return;   // loaded when the batch ends
+        }
 
         if (file == juce::File())
         {
@@ -581,6 +596,12 @@ namespace rf::app
     //==============================================================================
     void AudioController::toggleAudition()
     {
+        if (batchActive)
+        {
+            views.statusBar.setMessage ("Audition is off while the batch runs", Tone::warning);
+            return;
+        }
+
         if (isAuditioning())
         {
             stopAudition();
@@ -680,6 +701,98 @@ namespace rf::app
             stopAudition();
             views.statusBar.setMessage ("Audition finished");
         }
+
+        if (onSnapshot != nullptr)
+            onSnapshot (snap);
+    }
+
+    //==============================================================================
+    bool AudioController::checkCanRecord()
+    {
+        const auto status = device.getStatus();
+        auto refuse = [this] (const juce::String& why)
+        {
+            views.statusBar.setMessage ("Cannot start: " + why, Tone::warning);
+            return false;
+        };
+
+        if (waitingForPermission)
+            return refuse ("waiting for microphone access (answer the macOS prompt)");
+
+        if (! status.isOpen)
+            return refuse ("no audio device is open");
+
+        if (selected.outputChannel < 0 || status.config.outputChannel < 0)
+            return refuse ("no output channel is open");
+
+        if (outputOnly)
+            return refuse ("the input is off (--no-input)");
+
+        if (inputBlockedByPermission)
+        {
+            showMicrophoneDenied();
+            return false;
+        }
+
+        if (status.config.inputChannel < 0)
+            return refuse ("no input channel is open");
+
+        return true;
+    }
+
+    double AudioController::switchSampleRate (double rate)
+    {
+        auto wanted = selected;
+        wanted.sampleRate = rate;
+        applyConfig (wanted, false);
+        return device.getStatus().config.sampleRate;
+    }
+
+    void AudioController::restoreConfig (const engine::DeviceConfig& config)
+    {
+        const auto status = device.getStatus();
+
+        if (! status.isOpen || ! juce::approximatelyEqual (status.config.sampleRate, config.sampleRate)
+            || status.config.bufferSize != config.bufferSize)
+            applyConfig (config, false);
+    }
+
+    void AudioController::setBatchActive (bool active)
+    {
+        if (active == batchActive)
+            return;
+
+        if (active)
+            stopAudition();
+
+        batchActive = active;
+        applyBatchLock();
+
+        if (! active)
+        {
+            views.audio.getOutputLevel().setEnabled (true);
+            views.audio.getAuditionButton().setEnabled (true);
+            refreshDeviceUi();   // restores the combos' enabled states
+
+            // Reload the lead's audition preview at the (possibly restored) device rate.
+            const auto file = leadFile;
+            const auto channel = leadChannel;
+            leadFile = juce::File();
+            setLead (file, channel);
+        }
+    }
+
+    void AudioController::applyBatchLock()
+    {
+        if (! batchActive)
+            return;   // refreshDeviceUi has set the normal enabled states
+
+        auto& a = views.audio;
+
+        for (auto* c : std::initializer_list<juce::Component*> { &a.getTypeBox(), &a.getOutputDeviceBox(), &a.getInputDeviceBox(),
+                                                                 &a.getSampleRateBox(), &a.getBufferSizeBox(), &a.getOutputChannelBox(),
+                                                                 &a.getInputChannelBox(), &a.getOutputLevel(), &a.getAuditionButton() })
+            c->setEnabled (false);
     }
 
     //==============================================================================

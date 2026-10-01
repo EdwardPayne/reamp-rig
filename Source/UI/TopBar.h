@@ -4,10 +4,9 @@
 
 namespace rf::ui
 {
-    /*  44 px bar across the top of the window: app name, device summary,
-        sync status chip and the batch transport (Start / Pause / Stop).
-        The device summary and sync chip are live since phase 3; the transport is wired up
-        in phase 4.
+    /*  44 px bar across the top of the window: app name, device summary, sync status chip
+        and the batch transport (Start / Pause-Resume / Skip / Stop). The app sets the
+        transport state and receives the button presses through the callbacks.
     */
     class TopBar final : public juce::Component,
                          public juce::SettableTooltipClient
@@ -20,6 +19,14 @@ namespace rf::ui
         const juce::String& getDeviceSummary() const noexcept   { return deviceSummary; }
 
         void setSyncStatus (const juce::String& text, juce::Colour colour, const juce::String& tooltip);
+
+        enum class Transport { idle, running, paused };
+
+        /** Enables the buttons for the batch state; Pause reads "Resume" while paused. */
+        void setTransport (Transport);
+        Transport getTransport() const noexcept   { return transport; }
+
+        std::function<void()> onStart, onPauseResume, onSkip, onStop;
 
         void paint (juce::Graphics&) override;
         void resized() override;
@@ -42,7 +49,8 @@ namespace rf::ui
 
         juce::String deviceSummary;
         SyncChip syncChip;
-        juce::TextButton startButton { "Start" }, pauseButton { "Pause" }, stopButton { "Stop" };
+        juce::TextButton startButton { "Start" }, pauseButton { "Pause" }, skipButton { "Skip" }, stopButton { "Stop" };
+        Transport transport = Transport::idle;
 
         juce::Rectangle<int> brandArea, deviceArea;
         juce::String deviceTooltip;

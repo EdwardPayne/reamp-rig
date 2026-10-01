@@ -31,6 +31,7 @@ namespace rf::model
 
             ScanResult result;
             std::set<juce::String> seen;
+            juce::File root;    // the input currently being scanned
 
             bool aborted()
             {
@@ -52,7 +53,7 @@ namespace rf::model
                 juce::String reason;
 
                 if (FolderScanner::readInfo (file, formats, info, reason))
-                    result.files.push_back ({ file, info });
+                    result.files.push_back ({ file, info, root });
                 else
                     result.skipped.push_back ({ file, reason });
             }
@@ -156,12 +157,14 @@ namespace rf::model
                                     juce::AudioFormatManager& formats,
                                     const std::function<bool()>& shouldAbort)
     {
-        Scan scan { recursive, formats, shouldAbort, {}, {} };
+        Scan scan { recursive, formats, shouldAbort, {}, {}, {} };
 
         for (const auto& input : inputs)
         {
             if (scan.aborted())
                 break;
+
+            scan.root = input;
 
             if (input.isDirectory())
                 scan.addFolder (input);

@@ -12,7 +12,9 @@
 #include "../UI/TopBar.h"
 #include "../UI/WaveformPanel.h"
 #include "AudioController.h"
+#include "BatchController.h"
 #include "CommandLine.h"
+#include "OutputOptions.h"
 #include "Settings.h"
 
 namespace rf::app
@@ -32,15 +34,18 @@ namespace rf::app
         Owns the file list model and the folder scanner, accepts file/folder drops anywhere
         in the window, and keeps the waveform panel and status bar in step with the list.
         Owns the audio device and the AudioController (phase 3); Space toggles audition.
+        Phase 4: the OutputOptions binding (DESTINATION, OPTIONS) and the BatchController
+        (transport, per-file status, recorded lane); while a batch runs the waveform panel
+        follows the batch instead of the selection.
     */
     class MainComponent final : public juce::Component,
                                 public juce::FileDragAndDropTarget,
                                 private model::FileTree::Listener
     {
     public:
-        /** `useVirtualDevice` selects the development VirtualAudioDevice instead of the audio
-            hardware (--virtual-device). */
-        MainComponent (Settings&, bool useVirtualDevice);
+        /** --virtual-device and friends in `options` select the development loopback device
+            instead of the audio hardware. */
+        MainComponent (Settings&, const LaunchOptions& options);
         ~MainComponent() override;
 
         /** Scans files/folders off the message thread and adds the result to the list.
@@ -48,8 +53,9 @@ namespace rf::app
         void addPaths (const juce::Array<juce::File>&, std::function<void()> onAdded = {});
 
         /** Opens the audio device and applies --open plus the development aids (see
-            CommandLine.h). `onAuditionCheckDone` is called when --audition-check finishes. */
-        void applyLaunchOptions (const LaunchOptions&, std::function<void (bool ok)> onAuditionCheckDone = {});
+            CommandLine.h). `onCheckDone` is called when --audition-check or --batch-check
+            finishes. */
+        void applyLaunchOptions (const LaunchOptions&, std::function<void (bool ok)> onCheckDone = {});
 
         /** True while scans are pending or the selected file's waveform is still building. */
         bool isBusy() const;
@@ -65,6 +71,7 @@ namespace rf::app
 
     private:
         void fileTreeChanged() override;
+        void fileProgressChanged (model::ItemId) override {}
         void handleScanResult (const model::ScanResult&);
         void chooseFiles (bool folders);
         void layOutSplit (juce::Rectangle<int> area);
@@ -88,6 +95,8 @@ namespace rf::app
         // detaches the audio callback before the device goes away.
         std::unique_ptr<engine::AudioDeviceInterface> audioDevice;
         std::unique_ptr<AudioController> audio;
+        std::unique_ptr<OutputOptions> outputOptions;
+        std::unique_ptr<BatchController> batch;     // destroyed first: cancels a running take
 
         std::unique_ptr<juce::FileChooser> chooser;
         juce::TooltipWindow tooltipWindow { this, 600 };

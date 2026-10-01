@@ -5,9 +5,9 @@
 
 namespace rf::ui
 {
-    /*  The four sidebar sections. AUDIO (phase 3) and "Include subfolders" (phase 2) are live;
-        the rest are placeholders connected in phases 4 and 5. The sections only own and lay
-        out their controls; the app wires them to settings and the engine.
+    /*  The four sidebar sections. AUDIO (phase 3), DESTINATION and OPTIONS (phase 4) are
+        live; SYNC shows the driver latency and gets its measurement in phase 5. The sections
+        only own and lay out their controls; the app wires them to settings and the engine.
     */
 
     class AudioSection final : public SidebarSection
@@ -63,10 +63,28 @@ namespace rf::ui
     public:
         DestinationSection();
 
+        juce::ToggleButton& getBesideSourceRadio() noexcept     { return besideSource; }
+        juce::ToggleButton& getSingleFolderRadio() noexcept     { return singleFolder; }
+        juce::TextEditor& getSubfolderEditor() noexcept         { return subfolderEditor; }
+        PathField& getFolderField() noexcept                    { return folderField; }
+        juce::ToggleButton& getMirrorToggle() noexcept          { return mirror; }
+        juce::TextEditor& getPrefixEditor() noexcept            { return prefixEditor; }
+        juce::TextEditor& getSuffixEditor() noexcept            { return suffixEditor; }
+        ValueReadout& getExample() noexcept                     { return example; }
+        juce::ComboBox& getFormatBox() noexcept                 { return formatBox; }
+        juce::ComboBox& getCollisionBox() noexcept              { return collisionBox; }
+
+        /** Shows the rows of one destination mode: the subfolder name, or the output folder
+            with the mirror option. */
+        void showSingleFolderRows (bool singleFolderMode);
+
     private:
-        juce::ComboBox modeBox, formatBox, collisionBox;
+        juce::ToggleButton besideSource { "Subfolder next to source" }, singleFolder { "Single output folder" };
         juce::TextEditor subfolderEditor, prefixEditor, suffixEditor;
+        PathField folderField { "Choose a folder" };
+        juce::ToggleButton mirror { "Mirror folder structure" };
         ValueReadout example;
+        juce::ComboBox formatBox, collisionBox;
     };
 
     class OptionsSection final : public SidebarSection
@@ -76,6 +94,8 @@ namespace rf::ui
 
         /** "Include subfolders" (persisted by the app through its onClick). */
         juce::ToggleButton& getIncludeSubfoldersToggle() noexcept   { return includeSubfolders; }
+        juce::ToggleButton& getChannelTagToggle() noexcept          { return channelTag; }
+        juce::TextEditor& getTailEditor() noexcept                  { return tailEditor; }
 
     private:
         juce::ToggleButton includeSubfolders { "Include subfolders" };

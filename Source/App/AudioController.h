@@ -44,7 +44,7 @@ namespace rf::app
         };
 
         /** `needsMicrophonePermission` is false for devices that never touch the audio
-            hardware (the development VirtualAudioDevice). */
+            hardware (the --virtual-device LoopbackTestDevice). */
         AudioController (Settings&, engine::AudioDeviceInterface&, Views, bool needsMicrophonePermission = true);
         ~AudioController() override;
 
@@ -66,6 +66,36 @@ namespace rf::app
         /** Development aid for --audition-check (see CommandLine.h). */
         void runAuditionCheck (double seconds, std::function<void (bool ok)> onDone);
 
+        //==============================================================================
+        // Batch support (phase 4). The batch drives the same engine through these.
+        engine::DuplexEngine& getEngine() noexcept                  { return duplex; }
+        engine::DeviceStatus getDeviceStatus()                      { return device.getStatus(); }
+        const engine::DeviceConfig& getSelectedConfig() const noexcept   { return selected; }
+        juce::String describeDevice (const engine::DeviceStatus&) const;
+
+        /** True if a take can record now: device open, output and input channel open (the
+            input needs microphone access on macOS). Otherwise shows why in the status bar
+            (the same message as everywhere else, e.g. the microphone-denied one). */
+        bool checkCanRecord();
+
+        /** Reopens the device at `rate` for the batch (not saved). Returns the rate it runs at. */
+        double switchSampleRate (double rate);
+
+        /** Reopens `config` (not saved) if the device differs from it, e.g. after a batch
+            switched the sample rate. */
+        void restoreConfig (const engine::DeviceConfig&);
+
+        /** While a batch runs: audition is stopped and the AUDIO controls are disabled (the
+            meters stay live); the lead's audition preview is not reloaded on rate changes. */
+        void setBatchActive (bool);
+        bool isBatchActive() const noexcept                         { return batchActive; }
+
+        /** Called with every engine snapshot (30 Hz, message thread). */
+        std::function<void (const engine::EngineSnapshot&)> onSnapshot;
+
+        /** Called when the open device stops or disappears (message thread). */
+        std::function<void()> onDeviceStopped;
+
     private:
         void audioDeviceChanged() override;
         void timerCallback() override;
@@ -80,7 +110,7 @@ namespace rf::app
         void requestSourceLoad();
         void sourceLoaded (std::shared_ptr<const engine::LoadedSource>, const juce::String& error);
         void updateAuditionCheck (const engine::EngineSnapshot&);
-        juce::String describeDevice (const engine::DeviceStatus&) const;
+        void applyBatchLock();
 
         Settings& settings;
         engine::AudioDeviceInterface& device;
@@ -110,6 +140,7 @@ namespace rf::app
         engine::LoadRequest loadedRequest;      // what `loaded` (or the pending load) is for
         std::shared_ptr<const engine::LoadedSource> loaded;
         bool auditionPending = false;           // start as soon as the lead has loaded
+        bool batchActive = false;
 
         struct AuditionCheck
         {

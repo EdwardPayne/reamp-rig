@@ -3,12 +3,15 @@
 Batch re-amping of guitar DI tracks through a hardware amp via an audio interface.
 Desktop app, C++20 + JUCE 9.0.3 (fetched automatically), CMake.
 
-Status: **phase 3 (audio device layer)**. Files and folders can be dropped or added, are scanned
+Status: **phase 4 (engine + batch)**. Files and folders can be dropped or added, are scanned
 and listed grouped by folder with multi-select and L/R choice, and the selected file's waveform
 is shown with zoom and an audition start marker. The audio device, sample rate, buffer size and
 the output/input channels (with the driver's channel names) are chosen in the AUDIO section and
-remembered; input/output meters, the output level and Audition (Space) work. No recording or
-batch processing yet.
+remembered; input/output meters, the output level and Audition (Space) work. **Start** records
+every queued file through the amp: each file is played out of the output channel and the input
+is recorded in the same audio callback, latency-compensated to exactly the source's length (plus
+an optional tail), and written as WAV next to the source or into one folder. Latency is still
+the driver's estimate ("not calibrated"); measuring it (Sync) comes in phase 5.
 
 ## Requirements
 
@@ -89,6 +92,34 @@ have finished. Combine it with `--open=` and the development flags `--select=<fi
 (repeatable, first one is shown in the waveform panel), `--audition-at=<seconds>` and
 `--view=<start>:<end>` to capture a populated window (see `Source/App/CommandLine.h`).
 
+## Batch processing
+
+1. Add files, pick the L/R channel of stereo files, set the AUDIO section (one interface for
+   real work) and the output level (watch "Peak at output").
+2. DESTINATION: **Subfolder next to source** (default, `<source folder>/Reamped/`) or **Single
+   output folder** (choose it; "Mirror folder structure" recreates the folders below the folder
+   you added, e.g. `<output>/Session A/Takes/`). Prefix and suffix make
+   `<prefix><name><suffix>.wav` (example line underneath); OPTIONS "Append channel tag" adds
+   `_L`/`_R` for stereo sources. Format WAV 16 / 24 / 32-bit float at the source's sample rate.
+   Collision: Auto-number (`name (2).wav`), Overwrite or Skip. Tail (ms) records that much longer.
+3. **Start** processes every Queued file top to bottom (Done files are skipped until you reset
+   them: right-click > Reset status). **Pause** stops at once and records the interrupted file
+   again from its start on **Resume**; **Skip** skips the current file; **Stop** ends the batch
+   (the current file stays queued). Each result is written under a hidden temporary name and
+   renamed when complete, so an interrupted take never leaves a half-written file.
+4. The list shows status, progress and warning badges: **NC** not calibrated (latency estimated),
+   **RS** resampled (the device could not run at the file's rate), **XR** dropout, **SIL** recorded
+   silence?, **CLIP** clipped (hover for details). "Redo files with warnings" (right-click, or the
+   header button) queues the files with dropouts, silence or clipping again.
+5. The device is switched to each file's sample rate when it supports it (consecutive files with
+   the same rate need no switch) and restored afterwards; otherwise the file is resampled there
+   and back with a high-quality resampler and marked RS.
+
+**Sidecar log.** Every batch writes `Reamp Forge batch <date> <time>.txt` into the destination
+folder of its first file (the output folder itself in single-folder mode): device, rate, buffer,
+channels, level, latency used (measured or estimated), format and naming, then one entry per file
+(source → output, channel, samples, device rate, gain, latency, peak, warnings) as it finishes.
+
 ## Testing with the built-in mic and speakers
 
 On macOS the built-in microphone and speakers are separate CoreAudio devices. Pick
@@ -110,13 +141,21 @@ the chosen output channel from the waveform's audition marker.
 For one run only (nothing is saved): `--device=<name>` (input and output), `--output-device=`,
 `--input-device=`, `--device-type=`, `--sample-rate=`, `--buffer-size=`, `--output-channel=` and
 `--input-channel=` (1-based number or driver channel name), `--output-level=<dB>`, `--no-input`
-(output-only devices, no microphone prompt), `--virtual-device` (a silent software device, no
-hardware used) and `--audition-check[=seconds]` (auditions the selected file, prints progress to
-stderr, exits 0 on success). Example without touching any hardware:
+(output-only devices, no microphone prompt), `--virtual-device` (a software device, no hardware
+used, silent input), `--virtual-loopback[=n]` (the virtual device's output comes back on its
+input one buffer + n samples later, default 300), `--virtual-rates=48000` (rates it offers, e.g.
+to force resampling), `--virtual-speed=<x>` (run it x times faster than real time),
+`--audition-check[=seconds]` (auditions the selected file, prints progress to stderr, exits 0 on
+success), `--batch-check=<folder>` (runs a real batch of the opened files into `<folder>` on the
+virtual loopback device, prints one line per file plus a verification of every output, exits 0
+if all are exact; `--batch-check-transport` also exercises Pause/Resume, Skip and Stop;
+`--batch-check-hardware` allows the selected real device, without the content check) and
+`--sidebar-scroll=<section>` (for snapshots). Examples without touching any hardware:
 
 ```sh
-"build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge" --virtual-device \
-    --open="$HOME/DI/Session A" --select="Riff 01.wav" --output-level=-30 --audition-check=2
+APP="build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge"
+"$APP" --virtual-device --open="$HOME/DI/Session A" --select="Riff 01.wav" --output-level=-30 --audition-check=2
+"$APP" --open="$HOME/DI/Session A" --output-level=0 --virtual-speed=8 --batch-check=/tmp/reamp-check
 ```
 
 See `Source/App/CommandLine.h` for details.
@@ -127,15 +166,17 @@ See `Source/App/CommandLine.h` for details.
 CMakeLists.txt
 Assets/Fonts/     JetBrains Mono + Inter (Regular/Medium/Bold) and their OFL licences
 Source/Main.cpp   application entry point
-Source/App/       main window, root component, Settings, AudioController, microphone
-                  permission, command line, macOS appearance, snapshot and virtual device aids
+Source/App/       main window, root component, Settings, AudioController, BatchController,
+                  BatchLog, OutputOptions, microphone permission, command line, macOS
+                  appearance, snapshot aid
 Source/UI/        Theme (design tokens), Fonts, Format, LookAndFeel, TopBar, FileTreeView,
                   Sidebar + sections, Meters, WaveformPanel, StatusBar
-Source/Engine/    AudioDeviceInterface, JuceAudioDevice, DeviceSession, DuplexEngine,
-                  SourceLoader (more in phases 4-5)
-Source/Model/     FileItem, FileTree, FolderScanner
+Source/Engine/    AudioDeviceInterface, JuceAudioDevice, DeviceSession, DuplexEngine, RecordStream,
+                  Take, FileWriter, Resampler, SourceLoader, LoopbackTestDevice (SyncMeasurer in phase 5)
+Source/Model/     FileItem, FileTree, FolderScanner, BatchQueue, OutputNaming
 Tests/            JUCE UnitTest runner and tests (FolderScanner, FileTree, FileTreeView, Settings,
-                  DeviceSession, DuplexEngine, SourceLoader) and a fake audio device
+                  DeviceSession, DuplexEngine, SourceLoader, Resampler, Loopback end to end, Take,
+                  OutputNaming, BatchQueue) and a fake audio device
 ```
 
 See `ARCHITECTURE.md` for the thread and data-flow design, `PROMPT.md` for the full

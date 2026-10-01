@@ -33,14 +33,42 @@ namespace rf::app
                                    (only helps with output-only devices: on macOS a device
                                    that has inputs cannot be opened before the permission
                                    prompt has been answered)
-        --virtual-device           use a silent software device instead of the audio hardware
-                                   (App/VirtualAudioDevice.h); nothing is played or recorded
+        --virtual-device           use a software device instead of the audio hardware
+                                   (engine::LoopbackTestDevice, paced in real time): one
+                                   driver "Virtual", one device "Virtual Interface" with 2 inputs
+                                   and 4 outputs; inputs are silent, nothing reaches a speaker
+        --virtual-loopback[=<n>]   implies --virtual-device; the selected output is fed back to
+                                   the selected input one buffer plus <n> samples later
+                                   (default 300); the device reports that round trip as its
+                                   driver latency, so the "not calibrated" estimate is exact
+        --virtual-rates=<Hz,...>   sample rates the virtual device offers (default 44100,48000,
+                                   96000); e.g. 48000 to make every other file "resampled"
+        --virtual-speed=<x>        run the virtual device <x> times faster than real time
 
         --audition-check[=<sec>]   once the lead file is loaded, audition it for <sec> seconds
                                    (default 2), print progress (playhead, meter peaks) to
                                    stderr, stop and quit with exit code 0 if playback advanced
                                    and the output level matched the file peak plus gain.
                                    With --snapshot, the snapshot is taken during playback instead.
+
+        --batch-check=<folder>     once the --open scans finish, run a real batch of every queued
+                                   file into <folder> (single output folder, mirrored structure;
+                                   the other naming options as saved), print one line per file,
+                                   then verify every output (length = source + tail, content =
+                                   the played source channel times the output level: bit-exact,
+                                   or within -80 dB when resampled) and quit with exit code 0 if
+                                   all passed. Always runs on the virtual loopback device
+                                   (--virtual-loopback=300 unless given) and never on hardware,
+                                   unless --batch-check-hardware is added (then the content
+                                   check is skipped: a real amp or room is in the loop).
+                                   With --snapshot, the snapshot is taken mid-batch instead
+                                   (a file in the middle of the list about half recorded).
+        --batch-check-hardware     allow --batch-check on the selected real device
+        --batch-check-transport    with --batch-check: pause file 2 at 30 % and resume it after a
+                                   second, skip file 3, stop during file 5; passes if files 1, 2
+                                   and 4 are Done and exact, 3 Skipped, 5 Queued, no temp files
+        --sidebar-scroll=<name>    scroll the sidebar to a section (audio, sync, destination,
+                                   options), e.g. to show DESTINATION in a snapshot
     */
     struct LaunchOptions
     {
@@ -57,7 +85,14 @@ namespace rf::app
         std::optional<float> outputLevelDb;
         bool noInput = false;
         bool virtualDevice = false;
+        std::optional<int> virtualLoopbackDelay;
+        juce::Array<double> virtualRates;
+        double virtualSpeed = 1.0;
         std::optional<double> auditionCheckSeconds;
+        std::optional<juce::File> batchCheckFolder;
+        bool batchCheckHardware = false;
+        bool batchCheckTransport = false;
+        juce::String sidebarScroll;
 
         static LaunchOptions parse (const juce::StringArray& args, const juce::File& workingDirectory);
     };

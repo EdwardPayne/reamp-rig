@@ -47,6 +47,7 @@ namespace rf::model
             item.id = nextId++;
             item.file = s.file;
             item.info = s.info;
+            item.root = s.root;
 
             auto& files = group->files;
             files.insert (std::upper_bound (files.begin(), files.end(), item, naturalLess), item);
@@ -247,10 +248,14 @@ namespace rf::model
         for (auto id : ids)
         {
             if (auto* item = findMutable (id); item != nullptr
-                && (item->status != FileStatus::queued || item->progress != 0.0))
+                && (item->status != FileStatus::queued || item->progress != 0.0 || item->warnings != 0
+                    || item->outputFile != juce::File() || item->note.isNotEmpty()))
             {
                 item->status = FileStatus::queued;
                 item->progress = 0.0;
+                item->warnings = 0;
+                item->outputFile = juce::File();
+                item->note = {};
                 ++n;
             }
         }
@@ -259,6 +264,18 @@ namespace rf::model
             changed();
 
         return n;
+    }
+
+    std::vector<ItemId> FileTree::getIdsWithWarnings (juce::uint32 mask) const
+    {
+        std::vector<ItemId> ids;
+
+        for (const auto& g : groups)
+            for (const auto& item : g.files)
+                if (item.status == FileStatus::done && (item.warnings & mask) != 0)
+                    ids.push_back (item.id);
+
+        return ids;
     }
 
     bool FileTree::setStatus (ItemId id, FileStatus status, double progress)
@@ -271,6 +288,40 @@ namespace rf::model
         item->status = status;
         item->progress = juce::jlimit (0.0, 1.0, progress);
         changed();
+        return true;
+    }
+
+    bool FileTree::setResult (ItemId id, FileStatus status, double progress, juce::uint32 warnings,
+                              const juce::File& outputFile, const juce::String& note)
+    {
+        auto* item = findMutable (id);
+
+        if (item == nullptr)
+            return false;
+
+        item->status = status;
+        item->progress = juce::jlimit (0.0, 1.0, progress);
+        item->warnings = warnings;
+        item->outputFile = outputFile;
+        item->note = note;
+        changed();
+        return true;
+    }
+
+    bool FileTree::setProgress (ItemId id, double progress)
+    {
+        auto* item = findMutable (id);
+
+        if (item == nullptr)
+            return false;
+
+        progress = juce::jlimit (0.0, 1.0, progress);
+
+        if (juce::exactlyEqual (item->progress, progress))
+            return true;
+
+        item->progress = progress;
+        listeners.call ([id] (Listener& l) { l.fileProgressChanged (id); });
         return true;
     }
 

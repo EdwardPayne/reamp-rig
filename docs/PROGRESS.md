@@ -10,65 +10,206 @@ Phases are defined in `PROMPT.md` section 8; requirements are numbered per `PROM
 | 1 | Skeleton + theme | **Done** | 2026-09-30, clean Release build, launched, window captured | `docs/phase1.png` |
 | 2 | Files + waveform | **Done** | 2026-09-30, clean Release build, 3/3 ctest entries pass, launched with `--open`, snapshots checked | `docs/phase2.png`, `docs/phase2-zoom.png` |
 | 3 | Audio device layer | **Done** | 2026-09-30, clean Release build, 7/7 ctest entries pass (59 cases, 323 checks), launched on real CoreAudio devices, `--audition-check` passed on the virtual device, snapshots checked | `docs/phase3.png`, `docs/phase3-audition.png` |
-| 4 | Engine + batch | Not started | | |
+| 4 | Engine + batch | **Done** | 2026-10-01, clean Release build, 12/12 ctest entries pass (164 cases, 1095 checks), `--batch-check` passed on the virtual loopback device (rate switching, forced resampling, pause/resume/skip/stop), outputs compared with a script, a quiet real-hardware batch passed, launched on real CoreAudio devices, snapshot checked | `docs/phase4.png` |
 | 5 | Sync | Not started | | |
 | 6 | Polish | Not started | | |
 
 Environment used so far: macOS 26.6 (Apple Silicon), CMake 3.27.8, Apple Clang 21, Xcode
 Command Line Tools only, no Ninja. JUCE 9.0.3 fetched by CMake. Clean build about 1 minute.
+Terminal now has microphone access on the development Mac (the phase 4 hardware check recorded).
 
-## Next up: phase 4 — engine + batch
+## Next up: phase 5 — sync
 
-Spec: `PROMPT.md` sections 3.3 (batch: Start / Pause-Resume / Stop / Skip, exact length, tail,
-selected channel only, progress UI with "File 7 of 23 — 00:12 / 01:03 — ETA", lock-free FIFOs,
-xrun reporting, silence/clip checks), 3.4 (destination modes, prefix/suffix + live example,
-channel tag, WAV 16/24/32f at the source rate, collision policy, temp file + rename, sidecar
-log), 4.2-4.6 (take inside the one duplex callback, latency compensation, sample-rate switching
-or resampling with a "resampled" warning and grouping by rate, `LoopbackTestDevice`, writer
-thread), 3.5.2 (recorded thumbnail under the source, current/last file only), and from section 7
-the **end-to-end loopback test** (stereo and mono sources, buffers 64/256/480/1024, several
-delays, output sample-exact in length and content, bit-exact at 0 dB) and the **OutputNaming**
-tests. Persist the phase 4 keys (tail, prefix, suffix, destination mode, subfolder name, output
-folder, mirror flag, channel tag, bit depth, collision policy) with round-trip tests.
+Spec: `PROMPT.md` section 3.6 (Sync button with the "bypass the amp" line; click + ~50 ms
+exponential sweep at an adjustable level, default -12 dBFS, ~1 s recording, cross-correlation
+peak, 5 repeats, outliers discarded, median; result in samples and ms, returned peak level,
+confidence from peak-to-sidelobe ratio and repeatability within ±1 sample; plain-language
+failures for no peak / too low / clipped, never store a bad measurement; store keyed by device
+type + device name(s) + sample rate + buffer size; "Not synced for this configuration" warning
+next to Start with a confirmation to start anyway; driver latency shown next to the measured
+value), 3.7 (the keyed store is persisted), 4.4 (any rate or buffer change re-checks the stored
+value) and section 7 (**SyncMeasurer tests**: known delay at several delays, with noise, with a
+gain change, with a clipped return, a silent return rejected; **Settings round-trip of the keyed
+sync store**).
 
-Deliver:
+Deliver: `Source/Engine/SyncMeasurer`, the SYNC section live (level control, Sync button,
+measured readout with ms and confidence, failure messages), the top-bar chip and the Start
+warning, the keyed store in `Settings`, tests, docs, `docs/phase5.png`.
 
-- `Source/Engine/`: take mode in `DuplexEngine`, `Take`, `FileWriter` (writer thread, temp file
-  and rename), `Resampler` (high quality, fractional delay accounted for), `LoopbackTestDevice`.
-- `Source/Model/`: `BatchQueue`, `OutputNaming`.
-- DESTINATION and OPTIONS sections live; top-bar Start / Pause / Stop wired; per-file status and
-  progress in the list; recorded lane in the waveform panel; status line with ETA.
-- Tests listed above, wired into ctest. Update this file, `ARCHITECTURE.md` (take data flow,
-  writer thread, latency math), add `docs/phase4.png`.
+Hooks left by phase 4 for phase 5:
 
-Hooks left by phase 3 for phase 4:
+- **Where the latency enters a take:** `BatchController::startTake` (`Source/App/BatchController.cpp`)
+  sets `spec.latencySamples` to the driver-reported input + output latency and
+  `spec.latencyMeasured = false`. Replace that with a lookup in the keyed store for the device
+  status of *this* take (`takeStatus`: type, input/output device, `config.sampleRate`,
+  `config.bufferSize`); with a stored measurement set `latencyMeasured = true` and the file gets
+  no NC warning (the warning, the sidecar entry and the badge all follow `TakeResult::notCalibrated`).
+  Look it up per file, not once per batch: the batch switches the device rate per file group
+  (`BatchQueue::getGroups`), and every rate is its own key. The sidecar header's "Latency" line is
+  fixed text in `BatchController::openLog`; make it say measured or estimated.
+- **Engine path for the measurement:** `DuplexEngine::startTake (source, recordLength, stream)`
+  already plays an in-memory `LoadedSource` from sample 0 and captures the input into a
+  `RecordStream` in the same callback. A SyncMeasurer can build the click + sweep as a
+  `LoadedSource` at the device rate, start a take with `recordLength` ≈ 1 s and drain the stream
+  itself (no FileWriter) on a worker thread, then correlate; repeat 5 times. Do not reuse
+  `engine::Take` for it (that one always writes a file). Keep the audio thread untouched.
+- **Tests:** `engine::LoopbackTestDevice` has everything section 7 asks for: round trip =
+  `bufferSize + delay` (`getRoundTripSamples()`), `gain` (> 1 gives a clipped return), `noise`,
+  `loop = false` for a silent return, and `reportedInputLatency/reportedOutputLatency` to make the
+  driver estimate wrong on purpose. Drive it with `render()`; see `Tests/LoopbackTests.cpp` (`Rig`).
+- **Keyed sync store in `Settings`:** add typed accessors next to `getDeviceConfig` (for example
+  `getSyncMeasurement (const SyncKey&)` / `setSyncMeasurement`), key = type + input device +
+  output device + sample rate + buffer size, value = samples, ms, peak, confidence, date. Store as
+  one XML child or a `key -> value` property set in the same `PropertiesFile`; extend
+  `Tests/SettingsTests.cpp` (round trip, several keys, garbage).
+- **Top-bar chip:** `AudioController::refreshDeviceUi` always sets "Not synced" (warn) when a
+  device is open; make it "OK"/the measured value (ok colour) when the current
+  `DeviceStatus` has a stored measurement, "Not synced" otherwise. `refreshDeviceUi` already runs
+  after every device, rate or buffer change, including the batch's own rate switches.
+- **Start warning:** `BatchController::start` is the place. Before starting, check the current
+  configuration *and* each rate the batch will switch to (the entries' rates the device
+  supports); if any has no measurement, show the prominent "Not synced for this configuration"
+  warning next to Start and ask for confirmation (a themed dialog, no stock look); on confirm,
+  run as now (estimate + NC on those files). `--batch-check` must keep working without a prompt
+  (add a flag or treat the check as confirmed).
+- **SYNC section:** `ui::SyncSection` has the hint, `measured` and `driver` readouts and a Sync
+  button that is not wired; `getDriverReadout()` is already filled by AudioController. The level
+  control (default -12 dBFS) still has to be added.
+- Real numbers seen so far: the virtual loopback reports its exact round trip; the built-in
+  speakers + microphone (split devices, 48 kHz, 512) report in 3482 + out 1346 = 4828 samples.
 
-- `engine::DuplexEngine` (`Source/Engine/DuplexEngine.*`) is the single duplex callback. Add the
-  take next to audition: same immutable-command-through-an-atomic-pointer pattern (`Command`,
-  `retire()`, `callbackCount`), source from sample 0 into the output index, input index into a
-  lock-free FIFO (e.g. `juce::AbstractFifo` over a preallocated buffer), all other outputs
-  already zeroed. Stop audition before a batch starts. `EngineSnapshot` is where progress, xrun
-  counts and FIFO overflow flags go.
-- `engine::SourceLoader` decodes one channel into a `LoadedSource` (immutable, shared) on its own
-  thread; `loadAsync` cancels the previous request, so preloading the *next* file while the
-  current one plays needs a second loader instance (or a queue). Its resampler is JUCE's
-  windowed sinc with about -40 dB error on a test sine (fine for a level preview, see the
-  `SourceLoader` test): the record path needs the proper `Resampler` from 4.4.
-- `engine::AudioDeviceInterface` is what `LoopbackTestDevice` implements. `Tests/FakeAudioDevice.h`
-  is a working template: it passes all channels to the callback and drives it with `render()`;
-  the loopback device adds output-to-input with a configurable delay, gain and noise.
-  `DeviceStatus` carries the driver-reported input/output latency (the "not calibrated" estimate
-  and the sidecar log need it).
-- Sample-rate switching (4.4): open the same config with another `sampleRate` through
-  `DeviceSession::open` (`AudioController::applyConfig (wanted, false)` does that without
-  persisting). The controller already reloads the lead when the device rate changes.
-- `AudioController::isAuditioning()`, `stopAudition()`; `inputBlockedByPermission` tells whether
-  the input is really open (a batch must refuse to start without it, with the same message).
-- `WaveformPanel::setPlayhead (seconds)` for the batch playhead; `FileTree::setStatus` for rows.
-- `TopBar::setSyncStatus (text, colour, tooltip)` and the unwired Start/Pause/Stop buttons.
-- `Settings`: add typed accessors like `get/setOutputGainDb`; `Settings (juce::File)` for tests.
-- `--virtual-device` (silent software device) and `--audition-check` show how to verify app
-  paths without hardware; a batch check flag could reuse the pattern.
+## Phase 4 — what was done (2026-10-01)
+
+- `Source/Engine/`: **take mode in `DuplexEngine`** beside audition through the same immutable
+  command and atomic pointer (`startTake (source, recordLength, stream)`, `stopTake`): source from
+  sample 0 into the output channel with gain, the input channel into the take's lock-free
+  **`RecordStream`** (`juce::AbstractFifo` over a buffer allocated on the message thread; counts
+  dropped samples, callback gaps and position), all other outputs zeroed, exactly
+  `sourceLength + latency + tail` samples captured; callback-gap detection (> 1.75 buffers and
+  > buffer + 3 ms, injectable clock for tests); `EngineSnapshot` carries the take's progress, gaps
+  and overflow. **`FileWriter`** (writer thread): drains the FIFO, discards the latency, resamples
+  back to the file rate if needed, writes WAV 16/24/32f at the source rate with an exact
+  float-to-PCM conversion, hidden temp file renamed on completion, pads samples lost to an
+  overflow, measures the peak, feeds the recorded thumbnail. **`Take`**: one take's lengths,
+  FIFO, writer job and engine command; silence (< -60 dBFS) and clip (>= 0.9999) checks.
+  **`Resampler`** + `ResamplerStream`: Kaiser-windowed sinc evaluated at exact positions (no
+  latency, no fractional offset), -122 dBFS on a test sine, -116 dBFS round trip (details and all
+  numbers in `ARCHITECTURE.md`); the `SourceLoader` now uses it too. **`LoopbackTestDevice`**:
+  output fed back to input after one buffer + `delay`, gain, noise, exact reported latency, wrong
+  channels detectable, `render()` for tests and a paced thread for the app.
+  `DeviceStatus::xrunCount` (from `AudioDeviceManager::getXRunCount()`).
+- `Source/Model/`: **`BatchQueue`** (Queued files in list order, done files left out until reset,
+  advance/finish/pause/resume/stop/remove, peekNext, rate groups, remaining seconds for the ETA),
+  **`OutputNaming`** (prefix/suffix, channel tag, legal names, subfolder next to source or a
+  single folder flat or mirrored below the parent of the added folder, collision policies
+  overwrite/skip/auto-number "name (2).wav", validation, example line). `FileItem` gained `root`
+  (set by the scanner), `warnings`, `outputFile`, `note`; `FileTree` gained `setResult`,
+  `setProgress` (+ `Listener::fileProgressChanged`) and `getIdsWithWarnings`.
+- UI: **DESTINATION** live (square radio buttons for the mode, subfolder name or output-folder
+  field with a native folder chooser and the mirror checkbox, prefix, suffix, live example line
+  that follows the selected file, format, collision policy) and **OPTIONS** (channel tag, tail in
+  ms), all persisted on every change (`App/OutputOptions`). **Top bar** Start / Pause-Resume /
+  Skip / Stop wired. **File list**: status with warning badges (NC, RS, XR, SIL, CLIP; tooltip
+  spells them out with the output path), per-file progress (Done bars in `ok`), the current file
+  highlighted (accent tint and edge), context menu "Redo files with warnings", "Skip current
+  file", "Reset status" (never the file being recorded), and a "Redo warnings" header button when
+  such files exist. **Waveform panel**: batch playhead on the current file and the RECORDED lane
+  growing live under the source on the same axis (writer thread -> thumbnail); a Done file shows
+  its take from disk when selected. **Status line** "File 4 of 7 — 00:02 / 00:06 — ETA 00:35".
+- App: **`BatchController`** (sample-rate switching per file with restore at the end, resampled
+  fallback, own `SourceLoader` preloading the next file, driver-latency estimate marked "not
+  calibrated", refuses to start without an open input with the same status message, pauses when
+  the device stops, skips files removed meanwhile), **`BatchLog`** (sidecar log, see
+  `ARCHITECTURE.md`), `AudioController` hooks (engine access, `checkCanRecord`,
+  `switchSampleRate`, `restoreConfig`, `setBatchActive` locks AUDIO and stops audition).
+- Persistence: `tailMs`, `prefix`, `suffix`, `destinationMode`, `subfolderName`, `outputFolder`,
+  `mirrorStructure`, `channelTag`, `bitDepth`, `collisionPolicy`, typed accessors and round-trip
+  tests (defaults, every key, every enum value, non-ASCII, limits, garbage).
+- Dev flags: `--virtual-device` is now the `LoopbackTestDevice` (paced, silent; replaces
+  `App/VirtualAudioDevice`), `--virtual-loopback[=n]`, `--virtual-rates=`, `--virtual-speed=`,
+  `--batch-check=<folder>`, `--batch-check-transport`, `--batch-check-hardware`,
+  `--sidebar-scroll=<section>` (`Source/App/CommandLine.h`).
+- Tests (new categories `Resampler`, `Loopback`, `Take`, `OutputNaming`, `BatchQueue`; `Settings`
+  extended): **end-to-end loopback** (files on disk through loader, engine, loopback device, FIFO
+  and writer back to disk): mono, stereo L and stereo R × buffers 64/256/480/1024 × delays
+  0/1/37/256/1000 at tail 0, exact length and bit-exact at 0 dB with a unity loop (60 takes);
+  gain (-6 dB × loop 0.7, 32f) within 1e-6; tail 25 ms (length + 1200, source part exact, tail
+  silent); buffer 64 with delay 3000; 16-bit and 32-bit float sources exact in their own format;
+  44.1 kHz source on a device fixed at 48 kHz: exact length, -118.5 dBFS. A deliberate off-by-one
+  latency fails 60 checks (mutation check). `Take`: FIFO overflow counted, writer pads to the
+  exact length, callback gaps detected only during a take and not for jitter, gap -> dropout,
+  xrun count, silence and clip, cancel leaves no file, unwritable destination fails before
+  playback, audition/take command slot, record lengths. Resampler: lengths, exact positions,
+  four rate pairs and a round trip below -80 dB with alignment proven, streaming bit-identical to
+  offline. 164 test cases, 1095 checks.
+
+Verification commands (repository root; `SP` = the session scratchpad with the phase 2 audio):
+
+```sh
+cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"   # no errors, no warnings from our code
+ctest --test-dir build --output-on-failure                       # 12/12 passed
+APP="build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge"
+# 1. Batch on the virtual loopback (rates 44.1/48/96, device switches per file): exit 0
+"$APP" --open="$SP/audio/Session A" --open="$SP/audio/Session B" --output-level=0 --output-channel=3 \
+       --input-channel=2 --virtual-speed=8 --batch-check="$SP/p4/out1"
+#    7/7 Done, every output exactly as long as its source, 6 bit-exact with the played channel,
+#    Take 01 (32-bit float source, 24-bit output) -144.5 dBFS = 24-bit rounding; sidecar log written
+# 2. Device fixed at 48 kHz (resampling), buffer 256, loop delay 37: exit 0
+"$APP" ... --buffer-size=256 --virtual-loopback=37 --virtual-rates=48000 --batch-check="$SP/p4/out2"
+#    44.1/96 kHz files "resampled", exact lengths, -144.5 dBFS against the offline
+#    file -> 48 kHz -> file reference (i.e. aligned and identical up to 24-bit rounding)
+# 3. Pause/Resume, Skip, Stop exercised in the running app: exit 0
+"$APP" ... --virtual-speed=4 --batch-check="$SP/p4/out4" --batch-check-transport
+# 4. Snapshot mid-batch with DESTINATION in view
+"$APP" ... --buffer-size=256 --virtual-speed=2 --sidebar-scroll=destination \
+       --batch-check="$SP/p4/out3" --snapshot="$PWD/docs/phase4.png"
+# 5. Independent comparison (pure Python, reads the WAV integers)
+python3 "$SP/p4/compare.py" "$SP/audio/Session A/Riff 01.wav" "$SP/p4/out1/Session A/Riff 01_reamp.wav" 0
+#    length equal: True; samples differing: 0 of 576000; max abs difference: 0
+# 6. Real hardware, quiet (2 s, 440 Hz at -12 dBFS, output level -24 dB), built-in speakers + mic:
+"$APP" --open="$SP/p4/hw/Quiet Test.wav" --device-type=CoreAudio --output-device="MacBook Pro Speakers" \
+       --input-device="MacBook Pro Microphone" --output-level=-24 --batch-check-hardware --batch-check="$SP/p4/out_hw"
+#    Done, 96000 samples (= source), latency estimate in 3482 + out 1346, exit 0
+# 7. Real app, no flags, 6 s, quit via AppleScript: exit 0, devices listed, no errors
+```
+
+Deviations from the spec (phase 4):
+
+1. **Pause discards the current take**: the file goes back to Queued and is recorded again from
+   its start on Resume (a re-amp cannot continue mid-file without a discontinuity). Stop also
+   discards it and leaves it Queued; Skip marks it Skipped.
+2. **Loopback model**: the `LoopbackTestDevice` round trip is one buffer plus the configured delay
+   (output written in one callback is heard from the next, as on hardware). A loop that returns
+   a sample in the same callback is not causal, so "delay 0/1/37" means 64+0, 64+1, ... for buffer
+   64. The tests cover round trips that are not multiples of the buffer, shorter and longer than
+   it.
+3. `App/VirtualAudioDevice` was replaced by the `LoopbackTestDevice` (same names, paced, silent
+   by default); more dev flags (list above).
+4. **Skip** is a fourth top-bar button (after Pause); "Redo files with warnings" is a context
+   menu item and a header button that only appears when such files exist.
+5. "Redo files with warnings" re-queues files with dropout, silence or clip warnings. NC and RS
+   do not count: a new take would get them again (phase 5 can add NC files once calibrated).
+6. While a batch runs the AUDIO controls (except the meters), DESTINATION, OPTIONS and audition
+   are locked; the waveform panel follows the batch instead of the selection.
+7. **Sample-rate groups** are runs of consecutive files in list order (3.3.1 keeps list order); the
+   list is not reordered by rate. The device's rate is restored after the batch.
+8. Files added or reset while a batch runs are not picked up by that run.
+9. **ETA** is the remaining time (m:ss), not a clock time, at the pace measured so far.
+10. **Sidecar log**: one per batch, in the destination folder of the first file handled (the
+    output folder itself in single-folder mode).
+11. **Mirror structure** is relative to the parent of the folder the user added (so the added
+    folder's own name is kept); needs `FileItem::root`, set by the scanner.
+12. Default suffix "_reamp" (the phase 1 placeholder; the spec names no default).
+13. **Own float-to-PCM conversion** in the writer: JUCE 9's `writeFromFloatArrays` scales by
+    2^31 - 1 and writes 24-bit `k` as `k - 1` above -6 dBFS (16-bit above -6 dBFS too), which
+    breaks bit-exactness.
+14. **Xruns**: CoreAudio has no native xrun count; the app uses `AudioDeviceManager::getXRunCount()`
+    (JUCE's callback-overrun count plus the driver's where it exists) and its own callback-gap
+    detection. A gap shorter than ~0.75 buffer extra is not detected at small buffers.
+15. Radio buttons are drawn as squares with a filled inner square (no round shapes anywhere).
+16. The audition preview now uses the new Resampler as well (one resampler for both paths).
+17. The status column is wider (152 px) to fit the warning badges; the name column gives way.
 
 ## Phase 3 — what was done (2026-09-30)
 
@@ -286,23 +427,61 @@ Deviations from the spec, all accepted:
 
 ## Open issues
 
-- **Pending macOS microphone prompts.** Two prompts were shown during verification (TCC log,
-  23:51 and 23:59), both for **Terminal**, because apps launched from a shell are attributed to
-  their responsible process. They could not be answered here. Allowing Terminal lets dev runs
-  from Terminal record; launched from Finder (`open …app`) the app is asked under its own name.
-  `tccutil reset Microphone com.apple.Terminal` undoes a decision.
-- **Audition never played on real hardware** (instruction: speakers silent until the owner's
-  listening test). Verified with the fake device (sample-exact), the virtual device (whole app
-  path, `--audition-check`) and by opening real devices silently. First real test: set the level
-  low, pick the device, press Audition.
-- **Input meter never saw a real signal** (no microphone access in this session).
+- **Owner requests for phase 6 (2026-10-01):**
+  1. A **pause between files** setting in OPTIONS, in seconds, default **2 s**, persisted.
+     The batch waits that long after a file is written before the next take starts, so amp
+     and reverb tails die out. Show the wait in the status line.
+  2. **Never scan the output subfolder as a source.** When a folder is added with subfolders
+     on, skip any subfolder whose name equals the configured output subfolder name
+     (default "Reamped"), and report the skip in the status bar.
+  The default suffix `_reamp` is approved as is.
+- **No app icon.** The bundle has no `CFBundleIconFile`, so Finder and the Dock show a generic
+  icon and the app looks the same as the raw executable inside `Contents/MacOS`. The owner
+  launched that inner binary once by mistake and got a Terminal window. Phase 6: add an icon
+  set (black square, accent mark, matching the top-bar logo) via `ICON_BIG`/`ICON_SMALL` in
+  `juce_add_gui_app`.
+- **Microphone prompts (resolved for Terminal).** Phase 3 left two prompts for **Terminal**
+  (apps launched from a shell are attributed to their responsible process). By 2026-10-01
+  Terminal has access: the phase 4 hardware run recorded without a prompt. Launched from Finder
+  (`open …app`) the app is asked under its own name. `tccutil reset Microphone
+  com.apple.Terminal` undoes a decision.
+- Phase 3, verified manually by the owner on real hardware on 2026-10-01: files load,
+  waveforms render, the input meter moves with a live signal, real devices show in the pickers,
+  and output audition plays through the speakers with the playhead tracking. **Audition and the
+  input meter are now verified.** Mouse interactions (below) are still unverified.
 - **Mouse interactions not exercised automatically.** Click, shift/cmd-click, clicking L/R,
   the context menu, collapsing groups, drag-and-drop from Finder, scroll/pinch zoom, dragging the
   marker and the Add dialogs could not be driven: this Mac does not allow synthetic input
   (`osascript` keystrokes refused, error 1002) or screen capture. Phase 3 adds: the AUDIO combos
   and their popups, the level slider, clicking a meter to clear CLIP, the Audition button and
   Space (window-level key handler; tested only through code review). Needs a manual pass.
-- When the open device disappears the app stops and warns but does not switch back by itself
+  Phase 4 adds: the DESTINATION radios, the output-folder chooser, the text fields and combos,
+  the channel-tag and tail fields, clicking Start / Pause / Resume / Skip / Stop, the new context
+  menu items and the "Redo warnings" button, hovering status cells for the warning tooltip. The
+  batch itself, including pause/resume/skip/stop, was driven programmatically
+  (`--batch-check`, `--batch-check-transport`), not by clicks.
+- **Phase 4 on real hardware**: one quiet 2 s batch on the built-in speakers + microphone
+  (exact length, sidecar log, NC warning). No interface with a real loop was available, so the
+  driver-latency estimate has not been compared with a measured round trip yet (phase 5).
+  The take recorded a peak of -5.8 dBFS from a -36 dBFS output: room/microphone level, not
+  checked further.
+- **No gap between files.** The next take starts as soon as the previous file is written, so a
+  long amp/reverb tail of file N can still be sounding while file N+1 starts (its first
+  `latency` samples are discarded, the rest is kept). Use the tail setting, or add a pause
+  between takes if that turns out to matter (not in the spec).
+- **"Subfolder next to source" output is scanned again** if the user later adds the source
+  folder with "Include subfolders" on: the Reamped files are listed as sources. Temp files are
+  hidden and the log is not audio, so only finished results show up. Consider skipping folders
+  named like the subfolder (not in the spec).
+- Resampled takes lose source content above about 0.447 of the lower rate (band-limiting). The
+  synthetic test files have hard note cut-offs, so their resampled results differ from the raw
+  source by -20 to -67 dBFS at those edges while matching the offline resampled reference to
+  24-bit rounding. Real DI files rarely carry such content.
+- The batch holds the played channel of the current and the next file in memory (4 bytes per
+  sample each, same limit as the audition preview).
+- Gap detection uses wall-clock callback spacing; on a heavily loaded machine with tiny buffers
+  scheduling jitter above about 0.75 buffer + 3 ms would be reported as a dropout (warning only).
+- When the open device disappears disappears the app stops and warns but does not switch back by itself
   when the device returns; pick it again (or restart).
 - Driver type switching on Windows: JUCE opens the new type's default devices for a moment
   (the callback is not forwarded to them). ASIO/WASAPI never tested.
@@ -332,3 +511,6 @@ Deviations from the spec, all accepted:
 - 2026-09-30: Tests use JUCE `UnitTest` (no Catch2), one ctest entry per category.
 - 2026-09-30: On macOS no audio device is opened while microphone access is undetermined
   (JUCE 9 aggregate devices make coreaudiod block on the prompt). See phase 3 deviation 6.
+- 2026-10-01: Own windowed-sinc `Resampler` for the record path (JUCE's interpolator: about
+  -40 dB; ours: about -120 dB); also used for the audition preview.
+- 2026-10-01: Pause discards the current take and redoes the file on Resume.

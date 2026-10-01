@@ -16,6 +16,39 @@ namespace rf::app
         static constexpr auto outputChannel     = "outputChannel";
         static constexpr auto outputChannelName = "outputChannelName";
         static constexpr auto outputGainDb      = "outputGainDb";
+
+        static constexpr auto tailMs            = "tailMs";
+        static constexpr auto prefix            = "prefix";
+        static constexpr auto suffix            = "suffix";
+        static constexpr auto destinationMode   = "destinationMode";
+        static constexpr auto subfolderName     = "subfolderName";
+        static constexpr auto outputFolder      = "outputFolder";
+        static constexpr auto mirrorStructure   = "mirrorStructure";
+        static constexpr auto channelTag        = "channelTag";
+        static constexpr auto bitDepth          = "bitDepth";
+        static constexpr auto collisionPolicy   = "collisionPolicy";
+    }
+
+    namespace
+    {
+        const model::NamingOptions namingDefaults;
+
+        juce::String toKey (model::DestinationMode m)
+        {
+            return m == model::DestinationMode::singleFolder ? "singleFolder" : "subfolder";
+        }
+
+        juce::String toKey (model::CollisionPolicy p)
+        {
+            switch (p)
+            {
+                case model::CollisionPolicy::overwrite:  return "overwrite";
+                case model::CollisionPolicy::skip:       return "skip";
+                case model::CollisionPolicy::autoNumber: break;
+            }
+
+            return "autoNumber";
+        }
     }
 
     juce::PropertiesFile::Options Settings::makeOptions()
@@ -99,5 +132,101 @@ namespace rf::app
     void Settings::setOutputGainDb (float db)
     {
         file->setValue (key::outputGainDb, (double) juce::jlimit (minOutputGainDb, maxOutputGainDb, db));
+    }
+
+    //==============================================================================
+    int Settings::getTailMs() const
+    {
+        return juce::jlimit (0, maxTailMs, file->getIntValue (key::tailMs, 0));
+    }
+
+    void Settings::setTailMs (int ms)
+    {
+        file->setValue (key::tailMs, juce::jlimit (0, maxTailMs, ms));
+    }
+
+    juce::String Settings::getPrefix() const                { return file->getValue (key::prefix, namingDefaults.prefix); }
+    void Settings::setPrefix (const juce::String& p)        { file->setValue (key::prefix, p); }
+    juce::String Settings::getSuffix() const                { return file->getValue (key::suffix, namingDefaults.suffix); }
+    void Settings::setSuffix (const juce::String& s)        { file->setValue (key::suffix, s); }
+
+    model::DestinationMode Settings::getDestinationMode() const
+    {
+        return file->getValue (key::destinationMode) == toKey (model::DestinationMode::singleFolder)
+                 ? model::DestinationMode::singleFolder
+                 : model::DestinationMode::besideSource;
+    }
+
+    void Settings::setDestinationMode (model::DestinationMode m)
+    {
+        file->setValue (key::destinationMode, toKey (m));
+    }
+
+    juce::String Settings::getSubfolderName() const
+    {
+        const auto name = file->getValue (key::subfolderName).trim();
+        return name.isNotEmpty() ? name : namingDefaults.subfolderName;
+    }
+
+    void Settings::setSubfolderName (const juce::String& name)
+    {
+        file->setValue (key::subfolderName, name.trim());
+    }
+
+    juce::File Settings::getOutputFolder() const
+    {
+        const auto path = file->getValue (key::outputFolder);
+        return juce::File::isAbsolutePath (path) ? juce::File (path) : juce::File();
+    }
+
+    void Settings::setOutputFolder (const juce::File& folder)
+    {
+        file->setValue (key::outputFolder, folder.getFullPathName());
+    }
+
+    bool Settings::getMirrorStructure() const               { return file->getBoolValue (key::mirrorStructure, true); }
+    void Settings::setMirrorStructure (bool b)              { file->setValue (key::mirrorStructure, b); }
+    bool Settings::getChannelTag() const                    { return file->getBoolValue (key::channelTag, false); }
+    void Settings::setChannelTag (bool b)                   { file->setValue (key::channelTag, b); }
+
+    int Settings::getBitDepth() const
+    {
+        const auto bits = file->getIntValue (key::bitDepth, 24);
+        return bits == 16 || bits == 32 ? bits : 24;
+    }
+
+    void Settings::setBitDepth (int bits)
+    {
+        file->setValue (key::bitDepth, bits == 16 || bits == 32 ? bits : 24);
+    }
+
+    model::CollisionPolicy Settings::getCollisionPolicy() const
+    {
+        const auto value = file->getValue (key::collisionPolicy);
+
+        for (auto p : { model::CollisionPolicy::overwrite, model::CollisionPolicy::skip })
+            if (value == toKey (p))
+                return p;
+
+        return model::CollisionPolicy::autoNumber;
+    }
+
+    void Settings::setCollisionPolicy (model::CollisionPolicy p)
+    {
+        file->setValue (key::collisionPolicy, toKey (p));
+    }
+
+    model::NamingOptions Settings::getNamingOptions() const
+    {
+        model::NamingOptions o;
+        o.mode = getDestinationMode();
+        o.subfolderName = getSubfolderName();
+        o.outputFolder = getOutputFolder();
+        o.mirrorStructure = getMirrorStructure();
+        o.prefix = getPrefix();
+        o.suffix = getSuffix();
+        o.channelTag = getChannelTag();
+        o.collision = getCollisionPolicy();
+        return o;
     }
 }

@@ -18,6 +18,12 @@ namespace rf::ui
         it; right-click for the context menu. Keys while the list has focus: cmd-A, Delete /
         Backspace, L, R, Up/Down (shift extends).
 
+        Batch (phase 4): the file being recorded is highlighted (accent tint and edge), every
+        row shows its status with warning badges (NC, RS, XR, SIL, CLIP; details in the
+        tooltip) and its progress bar; progress-only changes repaint just that row. The
+        context menu offers "Skip current file", "Redo files with warnings" and "Reset status";
+        the header shows a "Redo warnings" button while files with redoable warnings exist.
+
         All state lives in the model::FileTree; this view only keeps collapse state, the
         shift-click anchor and hover.
     */
@@ -29,6 +35,12 @@ namespace rf::ui
         ~FileTreeView() override;
 
         std::function<void()> onAddFiles, onAddFolder;
+
+        /** Batch actions offered by the context menu and the header (the app performs them). */
+        std::function<void()> onSkipCurrent, onRedoWarnings;
+
+        /** The file the batch is recording (0 = none) and whether a batch is active. */
+        void setBatchState (model::ItemId current, bool active);
 
         /** Accent outline while files are dragged over the window. */
         void setDropHighlight (bool);
@@ -47,14 +59,18 @@ namespace rf::ui
         class Rows;
 
         void fileTreeChanged() override;
+        void fileProgressChanged (model::ItemId) override;
         void updateRowsSize();
+        void updateRedoButton();
         juce::String getCountText() const;
 
         model::FileTree& tree;
         std::unique_ptr<Rows> rows;
         juce::Viewport viewport;
-        juce::TextButton addFilesButton, addFolderButton;
+        juce::TextButton addFilesButton, addFolderButton, redoButton { "Redo warnings" };
         bool dropHighlight = false;
+        bool batchActive = false;
+        model::ItemId scrolledLead = 0;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FileTreeView)
     };

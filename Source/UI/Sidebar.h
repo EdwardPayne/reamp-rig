@@ -12,7 +12,12 @@ namespace rf::ui
 
         AudioSection& getAudioSection() noexcept       { return content.audio; }
         SyncSection& getSyncSection() noexcept         { return content.sync; }
+        DestinationSection& getDestinationSection() noexcept   { return content.destination; }
         OptionsSection& getOptionsSection() noexcept   { return content.options; }
+
+        /** Scrolls so the section titled `name` (e.g. "destination") is at the top, as far as
+            the content allows. Returns false if there is no such section. */
+        bool scrollToSection (const juce::String& name);
 
         void paint (juce::Graphics&) override;
         void resized() override;

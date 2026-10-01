@@ -40,6 +40,10 @@ namespace rf::model
         public:
             virtual ~Listener() = default;
             virtual void fileTreeChanged() = 0;
+
+            /** Only the progress of one item changed (the batch, about 10 times a second).
+                Called instead of fileTreeChanged so views can repaint just that row. */
+            virtual void fileProgressChanged (ItemId)   { fileTreeChanged(); }
         };
 
         FileTree() = default;
@@ -87,12 +91,22 @@ namespace rf::model
         int remove (const std::vector<ItemId>& ids);
         int removeSelected()                           { return remove (getSelectedIds()); }
 
-        /** Back to Queued with zero progress. */
+        /** Back to Queued with zero progress; clears warnings, output file and note. */
         int resetStatus (const std::vector<ItemId>& ids);
         int resetStatusOfSelected()                    { return resetStatus (getSelectedIds()); }
 
-        /** Hook for the batch (phase 4). */
+        /** Items whose last take has any of the `mask` warnings (Done files only). */
+        std::vector<ItemId> getIdsWithWarnings (juce::uint32 mask) const;
+
+        /** Batch: sets the status and progress (keeps warnings, output and note). */
         bool setStatus (ItemId, FileStatus, double progress);
+
+        /** Batch: the outcome of a take. */
+        bool setResult (ItemId, FileStatus, double progress, juce::uint32 warnings,
+                        const juce::File& outputFile, const juce::String& note);
+
+        /** Batch: progress only; notifies Listener::fileProgressChanged. */
+        bool setProgress (ItemId, double progress);
 
         //==============================================================================
         void addListener (Listener* l)                 { listeners.add (l); }

@@ -28,18 +28,22 @@ public:
                                                             juce::File::getCurrentWorkingDirectory());
 
         settings = std::make_unique<rf::app::Settings>();
-        mainWindow = std::make_unique<rf::app::MainWindow> (getApplicationName(), *settings, options.virtualDevice);
+        mainWindow = std::make_unique<rf::app::MainWindow> (getApplicationName(), *settings, options);
 
-        std::function<void (bool)> onAuditionCheckDone;
+        std::function<void (bool)> onCheckDone;
 
-        if (options.auditionCheckSeconds.has_value() && ! options.snapshotFile.has_value())
-            onAuditionCheckDone = [this] (bool ok)
+        if ((options.auditionCheckSeconds.has_value() || options.batchCheckFolder.has_value()) && ! options.snapshotFile.has_value())
+            onCheckDone = [this] (bool ok)
             {
                 setApplicationReturnValue (ok ? 0 : 1);
                 quit();
             };
 
-        mainWindow->getMainComponent().applyLaunchOptions (options, onAuditionCheckDone);
+        mainWindow->getMainComponent().applyLaunchOptions (options, onCheckDone);
+
+        // A mid-batch snapshot may have to wait for several files to be recorded.
+        if (options.batchCheckFolder.has_value())
+            snapshotTimeoutMs = 300000;
 
         if (options.snapshotFile.has_value())
             scheduleSnapshot (*options.snapshotFile);
@@ -77,7 +81,7 @@ private:
         const auto elapsed = juce::Time::getMillisecondCounter() - snapshotStarted;
         const auto busy = mainWindow->getMainComponent().isBusy();
 
-        if (elapsed < 1500 || (busy && elapsed < 20000))
+        if (elapsed < 1500 || (busy && elapsed < snapshotTimeoutMs))
         {
             juce::Timer::callAfterDelay (100, [this, pngFile] { pollSnapshot (pngFile); });
             return;
@@ -92,6 +96,7 @@ private:
     std::unique_ptr<rf::app::Settings> settings;
     std::unique_ptr<rf::app::MainWindow> mainWindow;
     juce::uint32 snapshotStarted = 0;
+    juce::uint32 snapshotTimeoutMs = 20000;
 };
 
 START_JUCE_APPLICATION (ReampForgeApplication)

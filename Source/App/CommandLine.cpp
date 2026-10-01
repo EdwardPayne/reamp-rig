@@ -62,6 +62,26 @@ namespace rf::app
                 options.noInput = true;
             else if (arg == "--virtual-device")
                 options.virtualDevice = true;
+            else if (arg == "--virtual-loopback")
+                options.virtualLoopbackDelay = 300;
+            else if (optionValue (arg, "virtual-loopback", value))
+                options.virtualLoopbackDelay = juce::jmax (0, value.getIntValue());
+            else if (optionValue (arg, "virtual-rates", value))
+            {
+                for (const auto& r : juce::StringArray::fromTokens (value, ",", {}))
+                    if (r.getDoubleValue() > 0.0)
+                        options.virtualRates.add (r.getDoubleValue());
+            }
+            else if (optionValue (arg, "virtual-speed", value))
+                options.virtualSpeed = juce::jlimit (0.1, 100.0, value.getDoubleValue());
+            else if (optionValue (arg, "batch-check", value) && value.isNotEmpty())
+                options.batchCheckFolder = resolve (cwd, value);
+            else if (arg == "--batch-check-hardware")
+                options.batchCheckHardware = true;
+            else if (arg == "--batch-check-transport")
+                options.batchCheckTransport = true;
+            else if (optionValue (arg, "sidebar-scroll", value))
+                options.sidebarScroll = value;
             else if (arg == "--audition-check")
                 options.auditionCheckSeconds = 2.0;
             else if (optionValue (arg, "audition-check", value))
@@ -70,6 +90,13 @@ namespace rf::app
                 options.view = juce::Range<double> (value.upToFirstOccurrenceOf (":", false, false).getDoubleValue(),
                                                     value.fromFirstOccurrenceOf (":", false, false).getDoubleValue());
         }
+
+        // A batch check never touches the audio hardware unless explicitly allowed.
+        if (options.batchCheckFolder.has_value() && ! options.batchCheckHardware && ! options.virtualLoopbackDelay.has_value())
+            options.virtualLoopbackDelay = 300;
+
+        if (options.virtualLoopbackDelay.has_value())
+            options.virtualDevice = true;
 
         return options;
     }

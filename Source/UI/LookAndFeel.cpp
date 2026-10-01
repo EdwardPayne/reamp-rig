@@ -307,6 +307,25 @@ namespace rf::ui
         const juce::Rectangle<float> box (x, y, w, h);
         const auto focused = component.hasKeyboardFocus (false);
 
+        // Radio buttons (a radio group id): an outlined square with a filled square inside
+        // when chosen, so they read differently from check boxes. Still no rounded corners.
+        if (const auto* button = dynamic_cast<const juce::Button*> (&component); button != nullptr && button->getRadioGroupId() != 0)
+        {
+            g.setColour (isEnabled && isHighlighted ? colour::panel2 : colour::panel);
+            g.fillRect (box);
+            drawBorder (g, box, ! isEnabled ? colour::lineSoft
+                                : (ticked || focused || isHighlighted) ? colour::lineStrong
+                                                                       : colour::line);
+
+            if (ticked)
+            {
+                g.setColour (isEnabled ? colour::accent : colour::muted);
+                g.fillRect (box.reduced (w * 0.25f));
+            }
+
+            return;
+        }
+
         if (ticked)
         {
             g.setColour (isEnabled ? colour::accent : colour::panel2);

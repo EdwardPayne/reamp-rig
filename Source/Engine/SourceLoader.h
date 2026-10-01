@@ -35,10 +35,12 @@ namespace rf::engine
 
     /*  Decodes the chosen channel of a file into memory and measures its peak, on the loader
         thread (ARCHITECTURE.md). Used for the audition preview and the "resulting peak" shown
-        next to the output level; phase 4 reuses it to preload the next file of a batch.
+        next to the output level, and by the batch (its own instance) to load the current
+        file and preload the next one while a take records.
 
-        If the target rate differs from the file's rate the channel is resampled (windowed
-        sinc, latency compensated) so it can be played at the device rate.
+        If the target rate differs from the file's rate the channel is resampled with the
+        high-quality Resampler (aligned at sample 0) so it can be played at the device rate;
+        the batch uses the same path, so a resampled take plays exactly what audition plays.
     */
     class SourceLoader
     {

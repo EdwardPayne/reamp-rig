@@ -165,15 +165,92 @@ namespace rf::ui
 
     void ValueReadout::paint (juce::Graphics& g)
     {
-        const auto area = getLocalBounds();
+        auto area = getLocalBounds();
 
         g.setColour (colour::faint);
         g.setFont (Fonts::mono (type::fieldLabelSize));
         g.drawText (key, area, juce::Justification::centredLeft, false);
 
+        const auto keyWidth = key.isEmpty() ? 0 : juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), key) + metric::grid;
+        const auto valueFont = Fonts::mono (type::controlSize, FontWeight::medium);
+
         g.setColour (valueColour.value_or (colour::heading));
-        g.setFont (Fonts::mono (type::controlSize, FontWeight::medium));
-        g.drawText (value, area, juce::Justification::centredRight, true);
+        g.setFont (valueFont);
+
+        if (truncateStart)
+            g.drawText (fitFromStart (valueFont, value, area.getWidth() - keyWidth), area.withTrimmedLeft (keyWidth),
+                        juce::Justification::centredRight, false);
+        else
+            g.drawText (value, area, juce::Justification::centredRight, true);
+    }
+
+    //==============================================================================
+    juce::String fitFromStart (const juce::Font& font, const juce::String& text, int width)
+    {
+        if (juce::GlyphArrangement::getStringWidthInt (font, text) <= width)
+            return text;
+
+        const auto ellipsis = utf8 ("\xe2\x80\xa6");
+
+        for (int start = 1; start < text.length(); ++start)
+        {
+            const auto candidate = ellipsis + text.substring (start);
+
+            if (juce::GlyphArrangement::getStringWidthInt (font, candidate) <= width)
+                return candidate;
+        }
+
+        return ellipsis;
+    }
+
+    PathField::PathField (juce::String placeholderText)
+        : placeholder (std::move (placeholderText))
+    {
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    }
+
+    void PathField::setPath (const juce::String& displayPath)
+    {
+        path = displayPath;
+        repaint();
+    }
+
+    void PathField::mouseUp (const juce::MouseEvent& e)
+    {
+        if (isEnabled() && getLocalBounds().contains (e.getPosition()) && onClick != nullptr)
+            onClick();
+    }
+
+    void PathField::paint (juce::Graphics& g)
+    {
+        const auto bounds = getLocalBounds();
+        const auto hot = isEnabled() && isMouseOver (true);
+
+        g.setColour (hot ? colour::panel2 : colour::panel);
+        g.fillRect (bounds);
+        g.setColour (! isEnabled() ? colour::lineSoft : hot ? colour::lineStrong : colour::line);
+        g.drawRect (bounds, 1);
+
+        auto area = bounds.reduced (metric::grid, 0);
+        const auto font = Fonts::mono (type::controlSize);
+        g.setFont (font);
+
+        // "…" affordance on the right: the field opens a folder chooser.
+        const auto more = utf8 ("\xe2\x80\xa6");
+        const auto moreWidth = juce::GlyphArrangement::getStringWidthInt (font, more);
+        g.setColour (colour::faint);
+        g.drawText (more, area.removeFromRight (moreWidth), juce::Justification::centredRight, false);
+        area.removeFromRight (metric::grid);
+
+        if (path.isEmpty())
+        {
+            g.setColour (colour::muted);
+            g.drawText (placeholder, area, juce::Justification::centredLeft, true);
+            return;
+        }
+
+        g.setColour (isEnabled() ? colour::text : colour::muted);
+        g.drawText (fitFromStart (font, path, area.getWidth()), area, juce::Justification::centredLeft, false);
     }
 
     //==============================================================================

@@ -16,6 +16,7 @@ namespace rf::model
     {
         juce::File file;
         AudioFileInfo info;
+        juce::File root;    // the dropped/added folder (or file) that brought this file in
     };
 
     /** A file (or folder) the scan could not use, with a plain-language reason. */

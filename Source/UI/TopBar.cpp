@@ -55,14 +55,38 @@ namespace rf::ui
 
         setButtonStyle (startButton, ButtonStyle::primary);
         setButtonStyle (pauseButton, ButtonStyle::secondary);
+        setButtonStyle (skipButton,  ButtonStyle::secondary);
         setButtonStyle (stopButton,  ButtonStyle::secondary);
 
         startButton.setTooltip ("Process every queued file from top to bottom.");
-        pauseButton.setTooltip ("Pause after the current buffer; press again to resume.");
-        stopButton.setTooltip ("Stop the batch. The current take is discarded.");
+        pauseButton.setTooltip ("Pause now: the current take is discarded and that file is recorded again "
+                                "from its start when you resume.");
+        skipButton.setTooltip ("Skip the current file (marked Skipped) and continue with the next.");
+        stopButton.setTooltip ("Stop the batch. The current take is discarded and its file stays queued.");
 
-        for (auto* b : { &startButton, &pauseButton, &stopButton })
+        startButton.onClick = [this] { if (onStart != nullptr)       onStart(); };
+        pauseButton.onClick = [this] { if (onPauseResume != nullptr) onPauseResume(); };
+        skipButton.onClick  = [this] { if (onSkip != nullptr)        onSkip(); };
+        stopButton.onClick  = [this] { if (onStop != nullptr)        onStop(); };
+
+        for (auto* b : { &startButton, &pauseButton, &skipButton, &stopButton })
             addAndMakeVisible (b);
+
+        setTransport (Transport::idle);
+    }
+
+    void TopBar::setTransport (Transport t)
+    {
+        transport = t;
+
+        startButton.setEnabled (t == Transport::idle);
+        pauseButton.setEnabled (t != Transport::idle);
+        skipButton.setEnabled (t == Transport::running);
+        stopButton.setEnabled (t != Transport::idle);
+
+        pauseButton.setButtonText (t == Transport::paused ? "Resume" : "Pause");
+        setButtonStyle (pauseButton, t == Transport::paused ? ButtonStyle::primary : ButtonStyle::secondary);
+        repaint();
     }
 
     void TopBar::setDeviceSummary (const juce::String& summary, const juce::String& tooltip)
@@ -127,7 +151,8 @@ namespace rf::ui
         };
 
         placeRight (stopButton,  72, buttonHeight);
-        placeRight (pauseButton, 80, buttonHeight);
+        placeRight (skipButton,  72, buttonHeight);
+        placeRight (pauseButton, 88, buttonHeight);
         placeRight (startButton, 88, buttonHeight);
         area.removeFromRight (metric::grid);
         placeRight (syncChip, syncChip.getIdealWidth(), chipHeight);

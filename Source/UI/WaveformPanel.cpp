@@ -58,6 +58,7 @@ namespace rf::ui
     {
         formats.registerBasicFormats();
         thumbnail.addChangeListener (this);
+        recorded.addChangeListener (this);
 
         // Clicking to place the audition marker must not take keyboard focus from the file list.
         setMouseClickGrabsKeyboardFocus (false);
@@ -73,6 +74,7 @@ namespace rf::ui
     WaveformPanel::~WaveformPanel()
     {
         scrollBar.removeListener (this);
+        recorded.removeChangeListener (this);
         thumbnail.removeChangeListener (this);
     }
 
@@ -185,6 +187,67 @@ namespace rf::ui
         return hasSource() && ! thumbnail.isFullyLoaded();
     }
 
+    //==============================================================================
+    void WaveformPanel::beginRecording (const juce::File& source, double rate, juce::int64 expectedLength)
+    {
+        {
+            const std::scoped_lock lock (recordedLock);
+            recorded.reset (1, rate, expectedLength);
+            recordedLive = true;
+            recordedSource = source;
+            recordedFile = juce::File();
+        }
+
+        repaint();
+    }
+
+    void WaveformPanel::addRecordedSamples (juce::int64 start, const float* data, int numSamples)
+    {
+        const std::scoped_lock lock (recordedLock);
+
+        if (! recordedLive || numSamples <= 0)
+            return;
+
+        // A non-owning view of the writer's block (addBlock only reads it).
+        float* channels[] = { const_cast<float*> (data) };
+        const juce::AudioBuffer<float> block (channels, 1, numSamples);
+        recorded.addBlock (start, block, 0, numSamples);
+    }
+
+    void WaveformPanel::showRecordedFile (const juce::File& source, const juce::File& file)
+    {
+        {
+            const std::scoped_lock lock (recordedLock);
+
+            if (source == recordedSource && (recordedLive || file == recordedFile))
+                return;   // already shown (the live thumbnail of the same take is as good)
+
+            recordedLive = false;
+            recordedSource = source;
+            recordedFile = file;
+            recorded.setSource (new juce::FileInputSource (file));
+        }
+
+        repaint();
+    }
+
+    void WaveformPanel::clearRecorded()
+    {
+        {
+            const std::scoped_lock lock (recordedLock);
+            recordedLive = false;
+            recordedSource = recordedFile = juce::File();
+            recorded.clear();
+        }
+
+        repaint();
+    }
+
+    bool WaveformPanel::hasRecorded() const
+    {
+        return hasSource() && recordedSource == sourceFile && recorded.getNumChannels() > 0;
+    }
+
     void WaveformPanel::updateScrollBar()
     {
         const auto zoomed = hasSource() && visible.getLength() < duration - 1.0e-9;
@@ -294,12 +357,12 @@ namespace rf::ui
 
         auto source = area.removeFromTop (juce::roundToInt ((float) area.getHeight() * sourceLaneShare));
         area.removeFromTop (1); // separator
-        auto recorded = area;
+        auto recordedLane = area;
 
         sourceLabelArea   = source.removeFromLeft (laneLabelWidth);
         sourceWaveArea    = source;
-        recordedLabelArea = recorded.removeFromLeft (laneLabelWidth);
-        recordedWaveArea  = recorded;
+        recordedLabelArea = recordedLane.removeFromLeft (laneLabelWidth);
+        recordedWaveArea  = recordedLane;
 
         scrollBar.setBounds (scrollArea.withTrimmedLeft (laneLabelWidth));
 
@@ -322,7 +385,10 @@ namespace rf::ui
         g.setColour (colour::lineSoft);
         g.fillRect (sourceLabelArea.getX(), sourceLabelArea.getBottom(), getWidth(), 1);
 
-        paintEmptyLane (g, recordedLabelArea, recordedWaveArea, "Recorded", utf8 ("\xe2\x80\x94"));
+        if (hasRecorded())
+            paintRecordedLane (g, recordedLabelArea, recordedWaveArea);
+        else
+            paintEmptyLane (g, recordedLabelArea, recordedWaveArea, "Recorded", utf8 ("\xe2\x80\x94"));
 
         // Label column continues down beside the scrollbar.
         g.setColour (colour::lineSoft);
@@ -465,6 +531,19 @@ namespace rf::ui
             g.drawText ("Building waveform " + juce::String (percent) + "%",
                         sourceWaveArea.reduced (metric::grid, 4), juce::Justification::topRight, false);
         }
+    }
+
+    void WaveformPanel::paintRecordedLane (juce::Graphics& g, juce::Rectangle<int> label, juce::Rectangle<int> wave) const
+    {
+        g.setColour (colour::lineSoft);
+        g.fillRect (label.removeFromRight (1));
+        drawSectionLabel (g, "Recorded", label.reduced (metric::sectionPadding, metric::grid), juce::Justification::topLeft);
+
+        g.setColour (colour::lineSoft);
+        g.fillRect (wave.withSizeKeepingCentre (wave.getWidth(), 1));
+
+        g.setColour (colour::text);
+        recorded.drawChannel (g, wave.reduced (0, 3), visible.getStart(), visible.getEnd(), 0, 1.0f);
     }
 
     void WaveformPanel::paintEmptyLane (juce::Graphics& g, juce::Rectangle<int> label, juce::Rectangle<int> wave,

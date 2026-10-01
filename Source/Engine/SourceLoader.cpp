@@ -1,4 +1,5 @@
 #include "SourceLoader.h"
+#include "Resampler.h"
 
 #include <cmath>
 
@@ -13,50 +14,21 @@ namespace rf::engine
             return shouldAbort != nullptr && shouldAbort();
         }
 
-        /** Resamples `in` from `fromRate` to `toRate` with a windowed sinc interpolator,
-            removing the interpolator's latency so sample 0 stays at time 0. */
+        /** Resamples `in` from `fromRate` to `toRate` with the record path's Resampler
+            (aligned: output sample 0 is input sample 0, no latency). */
         bool resample (const juce::AudioBuffer<float>& in, double fromRate, double toRate,
                        juce::AudioBuffer<float>& out, const std::function<bool()>& shouldAbort)
         {
-            const auto ratio = fromRate / toRate;   // input samples per output sample
-            const auto outLength = (juce::int64) std::ceil ((double) in.getNumSamples() / ratio);
-            const auto latency = (int) std::lround ((double) juce::WindowedSincInterpolator::getBaseLatency() / ratio);
+            const auto outLength = Resampler::getOutputLength (in.getNumSamples(), fromRate, toRate);
 
-            if (outLength + latency > std::numeric_limits<int>::max())
+            if (outLength > std::numeric_limits<int>::max() / 2)
                 return false;
 
             out.setSize (1, (int) outLength, false, false, false);
 
-            juce::WindowedSincInterpolator interpolator;
-            juce::HeapBlock<float> block ((size_t) chunkSize);
-
-            const auto* src = in.getReadPointer (0);
-            const auto available = in.getNumSamples();
-            auto inPos = 0;
-            juce::int64 produced = 0;   // including the latency samples that are dropped
-            const auto total = outLength + latency;
-
-            while (produced < total)
-            {
-                if (aborted (shouldAbort))
-                    return false;
-
-                const auto n = (int) juce::jmin ((juce::int64) chunkSize, total - produced);
-                inPos += interpolator.process (ratio, src + juce::jmin (inPos, available), block.get(), n,
-                                               juce::jmax (0, available - inPos), 0);
-
-                for (int i = 0; i < n; ++i)
-                {
-                    const auto outIndex = produced + i - latency;
-
-                    if (outIndex >= 0)
-                        out.setSample (0, (int) outIndex, block[i]);
-                }
-
-                produced += n;
-            }
-
-            return true;
+            const Resampler resampler (fromRate, toRate);
+            return resampler.process (in.getReadPointer (0), in.getNumSamples(), out.getWritePointer (0), 0, outLength,
+                                      shouldAbort);
         }
     }
 

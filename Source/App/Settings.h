@@ -3,6 +3,7 @@
 #include <juce_data_structures/juce_data_structures.h>
 
 #include "../Engine/AudioDeviceInterface.h"
+#include "../Model/OutputNaming.h"
 
 namespace rf::app
 {
@@ -39,6 +40,51 @@ namespace rf::app
         static constexpr float maxOutputGainDb = 12.0f;
         float getOutputGainDb() const;
         void setOutputGainDb (float);
+
+        //==============================================================================
+        // Output files and batch options (phase 4, PROMPT.md 3.3.2 and 3.4)
+
+        /** Extra recording after the source, 0..60000 ms, default 0. */
+        static constexpr int maxTailMs = 60000;
+        int getTailMs() const;
+        void setTailMs (int);
+
+        /** Default "" and "_reamp". */
+        juce::String getPrefix() const;
+        void setPrefix (const juce::String&);
+        juce::String getSuffix() const;
+        void setSuffix (const juce::String&);
+
+        /** Default: subfolder next to the source. */
+        model::DestinationMode getDestinationMode() const;
+        void setDestinationMode (model::DestinationMode);
+
+        /** Default "Reamped"; an empty saved value reads as the default. */
+        juce::String getSubfolderName() const;
+        void setSubfolderName (const juce::String&);
+
+        /** Single output folder mode; empty (not chosen) by default. */
+        juce::File getOutputFolder() const;
+        void setOutputFolder (const juce::File&);
+
+        /** Mirror the source folder structure under the output folder; default on. */
+        bool getMirrorStructure() const;
+        void setMirrorStructure (bool);
+
+        /** Append _L / _R for stereo sources; default off. */
+        bool getChannelTag() const;
+        void setChannelTag (bool);
+
+        /** 16, 24 (default) or 32 (float). */
+        int getBitDepth() const;
+        void setBitDepth (int);
+
+        /** Default auto-number. */
+        model::CollisionPolicy getCollisionPolicy() const;
+        void setCollisionPolicy (model::CollisionPolicy);
+
+        /** All naming fields in one struct. */
+        model::NamingOptions getNamingOptions() const;
 
         //==============================================================================
         /** Writes pending changes now (also done automatically shortly after each change). */

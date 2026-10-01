@@ -73,16 +73,22 @@ set_target_properties(ReampForgeAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Model sources (no GUI, no audio thread). Compiled into both the app and the tests;
 # JUCE modules are compiled per target, so a shared static library would duplicate them.
 set(REAMPFORGE_MODEL_SOURCES
+    Source/Model/BatchQueue.cpp
     Source/Model/FileItem.cpp
     Source/Model/FileTree.cpp
-    Source/Model/FolderScanner.cpp)
+    Source/Model/FolderScanner.cpp
+    Source/Model/OutputNaming.cpp)
 
 # Engine sources without a hardware dependency (compiled into the app and the tests).
-# JuceAudioDevice (the real device) is app-only; the tests use a fake device.
+# JuceAudioDevice (the real device) is app-only; the tests use the fake and loopback devices.
 set(REAMPFORGE_ENGINE_SOURCES
     Source/Engine/DeviceSession.cpp
     Source/Engine/DuplexEngine.cpp
-    Source/Engine/SourceLoader.cpp)
+    Source/Engine/FileWriter.cpp
+    Source/Engine/LoopbackTestDevice.cpp
+    Source/Engine/Resampler.cpp
+    Source/Engine/SourceLoader.cpp
+    Source/Engine/Take.cpp)
 
 #===============================================================================
 # Application
@@ -99,12 +105,14 @@ juce_add_gui_app(ReampForge
 target_sources(ReampForge PRIVATE
     Source/Main.cpp
     Source/App/AudioController.cpp
+    Source/App/BatchController.cpp
+    Source/App/BatchLog.cpp
     Source/App/CommandLine.cpp
     Source/App/MainComponent.cpp
     Source/App/MainWindow.cpp
+    Source/App/OutputOptions.cpp
     Source/App/Settings.cpp
     Source/App/Snapshot.cpp
-    Source/App/VirtualAudioDevice.cpp
     Source/UI/Fonts.cpp
     Source/UI/LookAndFeel.cpp
     Source/UI/TopBar.cpp
@@ -178,6 +186,11 @@ if(REAMPFORGE_BUILD_TESTS)
         Tests/DeviceSessionTests.cpp
         Tests/DuplexEngineTests.cpp
         Tests/SourceLoaderTests.cpp
+        Tests/ResamplerTests.cpp
+        Tests/LoopbackTests.cpp
+        Tests/TakeTests.cpp
+        Tests/OutputNamingTests.cpp
+        Tests/BatchQueueTests.cpp
         Source/App/Settings.cpp
         Source/UI/Fonts.cpp
         Source/UI/LookAndFeel.cpp
@@ -204,7 +217,8 @@ if(REAMPFORGE_BUILD_TESTS)
             juce::juce_recommended_config_flags
             juce::juce_recommended_warning_flags)
 
-    foreach(_rf_category FolderScanner FileTree FileTreeView Settings DeviceSession DuplexEngine SourceLoader)
+    foreach(_rf_category FolderScanner FileTree FileTreeView Settings DeviceSession DuplexEngine SourceLoader
+                         Resampler Loopback Take OutputNaming BatchQueue)
         add_test(NAME ${_rf_category}
                  COMMAND ReampForgeTests --category=${_rf_category})
     endforeach()

@@ -7,7 +7,7 @@ namespace rf::engine
     /*  Abstract audio device (PROMPT.md section 4.5).
 
         Everything the engine and the app need from an audio interface, kept small so that a
-        simulated device (phase 4's LoopbackTestDevice, the fake device in Tests/) can
+        simulated device (LoopbackTestDevice, the fake device in Tests/) can
         implement it without hardware. The real implementation is JuceAudioDevice.
 
         Threading: every method is message-thread only, except DuplexCallback::process(),
@@ -60,6 +60,7 @@ namespace rf::engine
         juce::Array<int> bufferSizes;
         int inputLatencySamples = 0;            // driver-reported
         int outputLatencySamples = 0;
+        int xrunCount = -1;                     // xruns since the device started, -1 if unknown
         juce::String lastError;
     };
 

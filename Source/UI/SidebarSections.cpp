@@ -132,25 +132,50 @@ namespace rf::ui
         : SidebarSection ("Destination"),
           example ("Example", "Reamped/Riff 01_reamp.wav")
     {
-        fillCombo (modeBox,      { "Subfolder next to source", "Single output folder" },
-                   "Where processed files are written.");
-        fillCombo (formatBox,    { utf8 ("WAV \xc2\xb7 16-bit"), utf8 ("WAV \xc2\xb7 24-bit"), utf8 ("WAV \xc2\xb7 32-bit float") },
-                   "Output file format. The sample rate always matches the source.");
-        fillCombo (collisionBox, { "Auto-number", "Overwrite", "Skip" },
-                   "What to do when the output file already exists.");
-        formatBox.setSelectedItemIndex (1, juce::dontSendNotification);
+        constexpr int destinationRadioGroup = 1001;
+
+        for (auto* radio : { &besideSource, &singleFolder })
+            radio->setRadioGroupId (destinationRadioGroup, juce::dontSendNotification);
+
+        besideSource.setToggleState (true, juce::dontSendNotification);
+        besideSource.setTooltip ("Write each result into a subfolder next to its source file.");
+        singleFolder.setTooltip ("Write every result into one folder you choose.");
 
         setUpEditor (subfolderEditor, "Reamped", "Name of the subfolder created next to each source file.");
-        setUpEditor (prefixEditor,    {},        "Text added before the original file name.");
-        setUpEditor (suffixEditor,    "_reamp",  "Text added after the original file name.");
+        subfolderEditor.setTextToShowWhenEmpty ("Reamped", theme::colour::muted);
+        folderField.setTooltip ("Folder that receives the processed files. Click to choose.");
+        mirror.setTooltip ("Recreate the source folders (below the folder you added) inside the output folder.");
+        mirror.setToggleState (true, juce::dontSendNotification);
 
-        example.setTooltip ("Resulting file name for a source called \"Riff 01.wav\".");
+        setUpEditor (prefixEditor, {},        "Text added before the original file name.");
+        setUpEditor (suffixEditor, "_reamp",  "Text added after the original file name.");
 
-        addRow ({ { "Mode", &modeBox } }, metric::controlHeight);
+        example.setTruncateFromStart (true);
+        example.setTooltip ("Resulting name for the selected file (or for \"Riff 01.wav\").");
+
+        fillCombo (formatBox,    { utf8 ("WAV \xc2\xb7 16-bit"), utf8 ("WAV \xc2\xb7 24-bit"), utf8 ("WAV \xc2\xb7 32 float") },
+                   "Output file format. The sample rate always matches the source.");
+        fillCombo (collisionBox, { "Auto-number", "Overwrite", "Skip" },
+                   "When the output file already exists: add \" (2)\" to the name, replace it, or skip the source.");
+        formatBox.setSelectedItemIndex (1, juce::dontSendNotification);
+
+        addRow ({ { "Mode", &besideSource } }, toggleHeight);
+        addRow ({ { {}, &singleFolder } }, toggleHeight);
         addRow ({ { "Subfolder", &subfolderEditor } }, metric::controlHeight);
+        addRow ({ { "Output folder", &folderField } }, metric::controlHeight);
+        addRow ({ { {}, &mirror } }, toggleHeight);
         addRow ({ { "Prefix", &prefixEditor }, { "Suffix", &suffixEditor } }, metric::controlHeight);
         addRow ({ { {}, &example } }, readoutHeight);
         addRow ({ { "Format", &formatBox }, { "Collision", &collisionBox } }, metric::controlHeight);
+
+        showSingleFolderRows (false);
+    }
+
+    void DestinationSection::showSingleFolderRows (bool singleFolderMode)
+    {
+        setRowVisible (subfolderEditor, ! singleFolderMode);
+        setRowVisible (folderField, singleFolderMode);
+        setRowVisible (mirror, singleFolderMode);
     }
 
     //==============================================================================
@@ -161,8 +186,9 @@ namespace rf::ui
         includeSubfolders.setTooltip ("Scan dropped and added folders recursively.");
         channelTag.setTooltip ("Append _L or _R to output names of stereo sources.");
 
-        setUpEditor (tailEditor, "0", "Extra time recorded after the source ends, in milliseconds.");
-        tailEditor.setInputRestrictions (6, "0123456789");
+        setUpEditor (tailEditor, "0", "Extra time recorded after the source ends, in milliseconds (0 = exactly "
+                                      "the source length).");
+        tailEditor.setInputRestrictions (5, "0123456789");
 
         addRow ({ { {}, &includeSubfolders } }, toggleHeight);
         addRow ({ { {}, &channelTag } }, toggleHeight);

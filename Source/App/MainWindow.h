@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "CommandLine.h"
 #include "Settings.h"
 
 namespace rf::app
@@ -12,7 +13,7 @@ namespace rf::app
     class MainWindow final : public juce::DocumentWindow
     {
     public:
-        MainWindow (const juce::String& name, Settings&, bool useVirtualDevice);
+        MainWindow (const juce::String& name, Settings&, const LaunchOptions&);
 
         MainComponent& getMainComponent();
 

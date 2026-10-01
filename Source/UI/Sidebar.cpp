@@ -58,4 +58,23 @@ namespace rf::ui
 
         content.setSize (width, contentHeight);
     }
+
+    bool Sidebar::scrollToSection (const juce::String& name)
+    {
+        const std::pair<const char*, SidebarSection*> named[] = { { "audio", &content.audio }, { "sync", &content.sync },
+                                                                  { "destination", &content.destination },
+                                                                  { "options", &content.options } };
+
+        for (const auto& [key, section] : named)
+        {
+            if (name.equalsIgnoreCase (key))
+            {
+                resized();
+                viewport.setViewPosition (0, section->getY());
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

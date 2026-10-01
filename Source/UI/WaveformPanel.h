@@ -2,6 +2,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
+#include <mutex>
 #include <optional>
 
 namespace rf::ui
@@ -18,8 +19,15 @@ namespace rf::ui
         Time axis: the ruler follows the visible range. Cmd+scroll or pinch zooms around the
         mouse; plain scroll (or the scrollbar) pans while zoomed. Clicking or dragging in the
         lanes sets the audition start point (accent marker with a flag). While a file plays
-        (audition now, the batch in phase 4) a 2 px accent playhead moves across the lanes and
-        the view follows it when zoomed in. The "Recorded" lane is a placeholder until phase 4.
+        (audition or the batch) a 2 px accent playhead moves across the lanes and the view
+        follows it when zoomed in.
+
+        Recorded lane (PROMPT.md 3.5.2): the result of the current or last take, under the
+        source on the same time axis (the writer delivers it latency-compensated, so sample 0
+        lines up with the source's sample 0). While a take records, the writer thread feeds
+        the samples it writes into a second AudioThumbnail (addRecordedSamples, thread-safe);
+        a finished take of another file is drawn from its written file, built on the
+        thumbnail cache's thread. Only one recorded thumbnail exists at a time.
     */
     class WaveformPanel final : public juce::Component,
                                 public juce::SettableTooltipClient,
@@ -53,6 +61,21 @@ namespace rf::ui
         /** True while the thumbnail is still being generated. */
         bool isLoading() const;
 
+        //==============================================================================
+        /** Starts a live recorded thumbnail for `source` (message thread). */
+        void beginRecording (const juce::File& source, double sampleRate, juce::int64 expectedLength);
+
+        /** Any thread (the writer thread): samples written to the take's file, file rate. */
+        void addRecordedSamples (juce::int64 start, const float* data, int numSamples);
+
+        /** Shows a finished take of `source` from its file (unless it is already shown). */
+        void showRecordedFile (const juce::File& source, const juce::File& recordedFile);
+
+        void clearRecorded();
+
+        /** True when the recorded lane has something to draw for the shown source. */
+        bool hasRecorded() const;
+
         void paint (juce::Graphics&) override;
         void resized() override;
         void mouseDown (const juce::MouseEvent&) override;
@@ -67,6 +90,7 @@ namespace rf::ui
         void paintHeader (juce::Graphics&, juce::Rectangle<int>) const;
         void paintRuler (juce::Graphics&, juce::Rectangle<int>) const;
         void paintSourceLane (juce::Graphics&, juce::Rectangle<int> label, juce::Rectangle<int> wave) const;
+        void paintRecordedLane (juce::Graphics&, juce::Rectangle<int> label, juce::Rectangle<int> wave) const;
         void paintEmptyLane (juce::Graphics&, juce::Rectangle<int> label, juce::Rectangle<int> wave,
                              const juce::String& name, const juce::String& text) const;
         void paintMarker (juce::Graphics&) const;
@@ -82,6 +106,14 @@ namespace rf::ui
         juce::AudioFormatManager formats;
         juce::AudioThumbnailCache thumbnailCache { 16 };
         mutable juce::AudioThumbnail thumbnail { 64, formats, thumbnailCache };   // drawChannel() is non-const
+
+        // Recorded result (current/last take only). `recordedLock` serialises the writer
+        // thread's addRecordedSamples with resets on the message thread.
+        juce::AudioThumbnailCache recordedCache { 1 };
+        mutable juce::AudioThumbnail recorded { 64, formats, recordedCache };
+        std::mutex recordedLock;
+        bool recordedLive = false;
+        juce::File recordedSource, recordedFile;
 
         juce::ScrollBar scrollBar { false };
 

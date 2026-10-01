@@ -1,5 +1,5 @@
 #include "MainComponent.h"
-#include "VirtualAudioDevice.h"
+#include "../Engine/LoopbackTestDevice.h"
 #include "../UI/Format.h"
 #include "../UI/LookAndFeel.h"
 #include "../UI/Theme.h"
@@ -33,11 +33,40 @@ namespace rf::app
         }
     }
 
-    MainComponent::MainComponent (Settings& s, bool useVirtualDevice)
+    namespace
+    {
+        /** The development device (--virtual-device): the loopback test device, paced in real
+            time, silent unless --virtual-loopback cables its output back to its input. */
+        std::unique_ptr<engine::AudioDeviceInterface> makeVirtualDevice (const LaunchOptions& launch)
+        {
+            engine::LoopbackTestDevice::Options o;
+            o.typeName = "Virtual";
+            o.deviceName = "Virtual Interface";
+            o.inputs = { "Virtual In 1", "Virtual In 2" };
+            o.outputs = { "Virtual Out 1", "Virtual Out 2", "Virtual Out 3", "Virtual Out 4" };
+            o.bufferSizes = { 64, 128, 256, 512, 1024 };
+            o.loop = launch.virtualLoopbackDelay.has_value();
+            o.delay = launch.virtualLoopbackDelay.value_or (0);
+            o.paced = true;
+            o.speed = launch.virtualSpeed;
+
+            if (! launch.virtualRates.isEmpty())
+            {
+                o.sampleRates = launch.virtualRates;
+                o.defaultSampleRate = launch.virtualRates.getFirst();
+            }
+
+            return std::make_unique<engine::LoopbackTestDevice> (o);
+        }
+    }
+
+    MainComponent::MainComponent (Settings& s, const LaunchOptions& launch)
         : settings (s)
     {
+        const auto useVirtualDevice = launch.virtualDevice;
+
         if (useVirtualDevice)
-            audioDevice = std::make_unique<VirtualAudioDevice>();
+            audioDevice = makeVirtualDevice (launch);
         else
             audioDevice = std::make_unique<engine::JuceAudioDevice>();
 
@@ -45,6 +74,11 @@ namespace rf::app
                                                    AudioController::Views { sidebar.getAudioSection(), sidebar.getSyncSection(),
                                                                             topBar, statusBar, waveformPanel },
                                                    ! useVirtualDevice);
+
+        outputOptions = std::make_unique<OutputOptions> (settings, sidebar.getDestinationSection(), sidebar.getOptionsSection());
+        batch = std::make_unique<BatchController> (*audio, fileModel, *outputOptions,
+                                                   BatchController::Views { topBar, statusBar, waveformPanel, fileTree });
+        batch->onFinished = [this] { fileTreeChanged(); };
 
         splitLayout.setItemLayout (1, metric::splitterSize, metric::splitterSize, metric::splitterSize);
 
@@ -90,7 +124,9 @@ namespace rf::app
     MainComponent::~MainComponent()
     {
         fileModel.removeListener (this);
-        audio = nullptr;          // detaches the callback first
+        batch = nullptr;          // cancels a running take while the engine still exists
+        outputOptions = nullptr;
+        audio = nullptr;          // detaches the callback
         audioDevice = nullptr;
     }
 
@@ -157,11 +193,21 @@ namespace rf::app
             fileTree.focusList();
     }
 
-    void MainComponent::applyLaunchOptions (const LaunchOptions& options, std::function<void (bool)> onAuditionCheckDone)
+    void MainComponent::applyLaunchOptions (const LaunchOptions& options, std::function<void (bool)> onCheckDone)
     {
         audio->openInitialDevice (options);
 
-        auto apply = [this, options, onAuditionCheckDone]
+        if (options.sidebarScroll.isNotEmpty())
+            juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this), name = options.sidebarScroll]
+            {
+                if (safe != nullptr)
+                    safe->sidebar.scrollToSection (name);
+            });
+
+        if (options.batchCheckFolder.has_value())
+            outputOptions->overrideDestination (*options.batchCheckFolder);
+
+        auto apply = [this, options, onCheckDone]
         {
             std::vector<model::ItemId> ids;
 
@@ -181,7 +227,13 @@ namespace rf::app
                 waveformPanel.setAuditionStart (*options.auditionStart);
 
             if (options.auditionCheckSeconds.has_value())
-                audio->runAuditionCheck (*options.auditionCheckSeconds, onAuditionCheckDone);
+                audio->runAuditionCheck (*options.auditionCheckSeconds, onCheckDone);
+
+            if (options.batchCheckFolder.has_value())
+                batch->setCheckTransport (options.batchCheckTransport);
+
+            if (options.batchCheckFolder.has_value())
+                batch->runCheck (options.snapshotFile.has_value(), ! options.batchCheckHardware, onCheckDone);
         };
 
         if (options.openPaths.isEmpty())
@@ -192,7 +244,7 @@ namespace rf::app
 
     bool MainComponent::isBusy() const
     {
-        return scanner.getNumPending() > 0 || waveformPanel.isLoading() || audio->isBusy();
+        return scanner.getNumPending() > 0 || waveformPanel.isLoading() || audio->isBusy() || batch->isWaitingForSnapshot();
     }
 
     void MainComponent::chooseFiles (bool folders)
@@ -219,11 +271,28 @@ namespace rf::app
     {
         statusBar.setQueueText (format::fileCount (fileModel.countWithStatus (model::FileStatus::queued)) + " queued");
 
-        if (const auto* lead = fileModel.find (fileModel.getLead()))
+        const auto* lead = fileModel.find (fileModel.getLead());
+
+        if (lead != nullptr)
+            outputOptions->setExampleSource (lead->file, lead->root,
+                                             lead->hasChannelChoice() ? std::optional<model::Channel> (lead->channel) : std::nullopt);
+        else
+            outputOptions->setExampleSource ({}, {}, std::nullopt);
+
+        // While a batch runs, the waveform panel follows the batch, not the selection.
+        if (batch != nullptr && batch->isActive())
+            return;
+
+        if (lead != nullptr)
         {
             const auto channel = lead->hasChannelChoice() && lead->channel == model::Channel::right ? 1 : 0;
             waveformPanel.setSource (lead->file, lead->info.numChannels, lead->info.sampleRate,
                                      lead->info.lengthInSamples, channel);
+
+            // The recorded lane shows this file's last take (built from the written file).
+            if (lead->status == model::FileStatus::done && lead->outputFile.existsAsFile())
+                waveformPanel.showRecordedFile (lead->file, lead->outputFile);
+
             audio->setLead (lead->file, channel);
         }
         else
