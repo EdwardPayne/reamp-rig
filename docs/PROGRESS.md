@@ -642,8 +642,8 @@ Deviations from the spec, all accepted:
   (`ReampRig`, `ReampRigTests`, artefacts under `build/ReampRig_artefacts`), top-bar logo,
   settings folder, sidecar log name and temp-file suffix all changed. Old settings are copied
   to the new location on first launch. GitHub repo renamed to `EdwardPayne/reamp-rig` (old
-  URL redirects). The local working folder is still `reamp-forge`; the `rf::` namespace is
-  kept. Older entries in this log keep the old name where they quote it. Snapshots before
+  URL redirects). The local working folder was renamed to `reamp-rig` the same day; the `rf::`
+  namespace is kept. Older entries in this log keep the old name where they quote it. Snapshots before
   phase 6 still show the old logo; phase 6 re-captures them.
 - 2026-09-30: JUCE over Tauri/Rust. Reason: a single duplex callback with a fixed in/out
   relationship is essential for sample-accurate sync; cpal has no merged synchronized CoreAudio
