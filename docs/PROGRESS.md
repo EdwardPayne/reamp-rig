@@ -635,6 +635,8 @@ Deviations from the spec, all accepted:
 
 ## Decision log
 
+- 2026-10-01: **Sync stays manual per sample rate.** The owner is fine switching the rate and
+  pressing Sync for each configuration; no "measure all rates" action will be added.
 - 2026-10-01: **Renamed the app from "Reamp Forge" to "Reamp Rig"** (owner choice; "Studio"
   rejected as generic). Product name, bundle id (`com.reamprig.app`), CMake targets
   (`ReampRig`, `ReampRigTests`, artefacts under `build/ReampRig_artefacts`), top-bar logo,
