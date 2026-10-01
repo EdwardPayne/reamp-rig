@@ -23,8 +23,9 @@ the source.
    (Space) to hear the selected file through the amp; watch "Peak at output" and the meters.
 3. Drop DI files or folders on the window (or **Add files…** / **Add folder…**). Folders are
    grouped by location; with **Include subfolders** on (OPTIONS) subfolders are scanned too,
-   except folders named like the DESTINATION subfolder (`Reamped`): those hold results. Click
-   **L** / **R** on stereo files to choose the channel that goes to the amp.
+   except folders named like the DESTINATION subfolder (`Reamped`), or in single-folder mode the
+   output folder itself: those hold results. Click **L** / **R** on stereo files to choose the
+   channel that goes to the amp (it stays fixed while that file is being recorded).
 
 Everything you set is remembered, including the window's size and position. When the interface
 is unplugged the app stops (a running batch pauses) and opens it again by itself as soon as it
@@ -72,7 +73,10 @@ the measurement at once; nothing is stored.
    you added, e.g. `<output>/Session A/Takes/`). Prefix and suffix make
    `<prefix><name><suffix>.wav` (example line underneath); OPTIONS "Append channel tag" adds
    `_L`/`_R` for stereo sources. Format WAV 16 / 24 / 32-bit float at the source's sample rate.
-   Collision: Auto-number (`name (2).wav`), Overwrite or Skip. Tail (ms) records that much longer.
+   Collision: Auto-number (`name (2).wav`), Overwrite or Skip; one batch never overwrites its own
+   results, so a second source that maps to the same name (`A/Riff.wav` and `B/Riff.wav` without
+   mirroring, or `x.wav` and `x.aif`) is numbered under every policy and the log says so. Tail
+   (ms) records that much longer.
 3. **Start** processes every Queued file top to bottom (Done files are skipped until you reset
    them: right-click > Reset status). Between two files the batch waits the **Pause between
    files** (OPTIONS, default 2 s) so the amp's and a reverb's tail dies out; the status line
@@ -90,7 +94,11 @@ the measurement at once; nothing is stored.
    configuration has been synced since.
 5. The device is switched to each file's sample rate when it supports it (consecutive files with
    the same rate need no switch) and restored afterwards; otherwise the file is resampled there
-   and back with a high-quality resampler and marked RS.
+   and back with a high-quality resampler and marked RS. If the interface refuses a rate it
+   lists, the batch pauses with a message naming the device and the rate; it never carries on
+   with another device. If the rate or buffer size is changed outside the app (Audio MIDI Setup,
+   the interface's software) during a batch, the batch pauses too and the interrupted file is
+   recorded again on Resume.
 
 **Sidecar log.** Every batch writes `Reamp Rig batch <date> <time>.txt` into the destination
 folder of its first file (the output folder itself in single-folder mode): device, rate, buffer,
@@ -101,7 +109,8 @@ channels, level, latency used (measured or estimated), format and naming, then o
 
 - Next to each source in `Reamped/` (default) or in one output folder you choose, named
   `<prefix><name><suffix>.wav` (default suffix `_reamp`), WAV 16 / 24 / 32-bit float at the
-  source's sample rate, mono.
+  source's sample rate, mono. Only characters no file system accepts (`/ \ : * ? " < > |` and
+  control characters) are removed from names; `# @ , ;` and accents stay.
 - One plain-text log per batch in the destination: `Reamp Rig batch <date> <time>.txt`, with the
   app version, the device, the latency used and every file's result and warnings.
 
@@ -240,12 +249,14 @@ For one run only (nothing is saved): `--device=<name>` (input and output), `--ou
 (output-only devices, no microphone prompt), `--virtual-device` (a software device, no hardware
 used, silent input), `--virtual-loopback[=n]` (the virtual device's output comes back on its
 input one buffer + n samples later, default 300), `--virtual-rates=48000` (rates it offers, e.g.
-to force resampling), `--virtual-speed=<x>` (run it x times faster than real time),
+to force resampling), `--virtual-reject-rate=44100` (rates it lists but refuses to open at: a
+batch then pauses instead of switching), `--virtual-speed=<x>` (run it x times faster than real time),
 `--audition-check[=seconds]` (auditions the selected file, prints progress to stderr, exits 0 on
 success), `--batch-check=<folder>` (runs a real batch of the opened files into `<folder>` on the
 virtual loopback device, prints one line per file plus a verification of every output, exits 0
 if all are exact; `--batch-check-transport` also exercises Pause/Resume, Skip and Stop;
-`--batch-check-hardware` allows the selected real device, without the content check) and
+`--batch-check-hardware` allows the selected real device, without the content check; each check
+needs its own hardware flag) and
 `--sidebar-scroll=<section>` (for snapshots), `--sync-check` (runs Sync on the virtual loopback,
 prints every repeat and the result, stores it, exits 0 when it matches the loop's true round trip;
 `--sync-check-hardware` allows the selected real device, `--sync-check-rates=44100,96000` also
@@ -290,6 +301,10 @@ See `Source/App/CommandLine.h` for details.
   terminal app.
 - Built-in speakers + microphone are two devices with separate clocks: fine for trying the app,
   "not sample-synchronized" for real work.
+- Output names longer than 240 bytes (UTF-8) are shortened at the end of the source name; the
+  prefix, suffix, channel tag, number and `.wav` are kept.
+- On Windows the file list tells files apart by path (not case-sensitive); on macOS by the file
+  itself, so two names that differ only in case are two files on a case-sensitive volume.
 
 ## Layout
 
@@ -308,7 +323,7 @@ Source/Engine/    AudioDeviceInterface, JuceAudioDevice, DeviceSession, DuplexEn
 Source/Model/     FileItem, FileTree, FolderScanner, BatchQueue, OutputNaming
 Tests/            JUCE UnitTest runner and tests (FolderScanner, FileTree, FileTreeView, Settings,
                   DeviceSession, DuplexEngine, SourceLoader, Resampler, Loopback end to end, Take,
-                  OutputNaming, BatchQueue, Sync, Keyboard) and a fake audio device
+                  OutputNaming, BatchQueue, Sync, Keyboard, CommandLine) and a fake audio device
 ```
 
 See `ARCHITECTURE.md` for the thread and data-flow design, `PROMPT.md` for the full

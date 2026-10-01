@@ -234,6 +234,81 @@ namespace rf::test
                 expect (anyContains (r.warnings, "Could not open \"Apollo Twin\" (Device is busy)"));
             }
 
+            // Review 2026-10-01, A1: a batch or sync rate switch must never land on the defaults.
+            beginTest ("rate switch, no-fallback mode: a refused rate is an error, never the default devices");
+            {
+                FakeAudioDevice fake;
+                addStudioDevices (fake, true);
+                fake.types[0].devices[2].rejectedRates = { 44100.0 };
+                DeviceSession session (fake);
+
+                expect (session.open (apolloConfig(), true).ok);
+                auto switched = apolloConfig();
+                switched.sampleRate = 44100.0;
+
+                // The normal path falls back to the system defaults (fine at launch) ...
+                const auto loose = session.open (switched, true);
+                expect (loose.ok);
+                expectEquals (loose.config.outputDevice, juce::String ("MacBook Pro Speakers"));
+
+                // ... the exact path does not.
+                expect (session.open (apolloConfig(), true).ok);
+                fake.openCalls.clear();
+
+                const auto r = session.open (switched, true, DeviceSession::Mode::exact);
+                expect (! r.ok);
+                expect (r.error.contains ("\"Apollo Twin\""), r.error);
+                expect (r.error.contains ("44.1 kHz"), r.error);
+                expect (r.warnings.isEmpty());
+
+                auto onlyApollo = ! fake.openCalls.empty();
+
+                for (const auto& c : fake.openCalls)
+                    onlyApollo = onlyApollo && c.outputDevice == "Apollo Twin" && c.inputDevice == "Apollo Twin";
+
+                expect (onlyApollo, "no other device was opened");
+                expect (! fake.getStatus().isOpen || fake.getStatus().config.outputDevice == "Apollo Twin");
+
+                // The caller reopens the previous rate on the same device, exactly.
+                const auto back = session.open (apolloConfig(), true, DeviceSession::Mode::exact);
+                expect (back.ok, back.error);
+                expectEquals (fake.getStatus().config.sampleRate, 48000.0);
+                expectEquals (fake.getStatus().config.outputDevice, juce::String ("Apollo Twin"));
+            }
+
+            beginTest ("rate switch, no-fallback mode: success, a missing device, a rate the driver rounds");
+            {
+                FakeAudioDevice fake;
+                addStudioDevices (fake, true);
+                DeviceSession session (fake);
+                expect (session.open (apolloConfig(), true).ok);
+
+                auto switched = apolloConfig();
+                switched.sampleRate = 96000.0;
+                const auto ok = session.open (switched, true, DeviceSession::Mode::exact);
+                expect (ok.ok, ok.error);
+                expectEquals (ok.config.sampleRate, 96000.0);
+                expectEquals (ok.config.inputChannelName, juce::String ("Hi-Z 1"));
+                expectEquals (ok.config.outputChannelName, juce::String ("Line 3"));
+
+                // Not listed (unplugged a moment ago): an error, and the device is not touched.
+                auto other = apolloConfig();
+                other.inputDevice = other.outputDevice = "Apollo x8";
+                fake.openCalls.clear();
+                const auto missing = session.open (other, true, DeviceSession::Mode::exact);
+                expect (! missing.ok);
+                expect (missing.error.contains ("\"Apollo x8\" is not available"), missing.error);
+                expect (fake.openCalls.empty(), "nothing was opened");
+                expect (fake.getStatus().isOpen && fake.getStatus().config.outputDevice == "Apollo Twin");
+
+                // A rate the device does not list: the driver would round it; exact refuses.
+                auto odd = apolloConfig();
+                odd.sampleRate = 88200.0;
+                const auto rounded = session.open (odd, true, DeviceSession::Mode::exact);
+                expect (! rounded.ok);
+                expect (rounded.error.contains ("instead of 88.2 kHz"), rounded.error);
+            }
+
             beginTest ("nothing opens: error, device closed, no crash");
             {
                 FakeAudioDevice fake;

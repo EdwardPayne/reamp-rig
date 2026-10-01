@@ -55,6 +55,8 @@ namespace rf::engine
             int reportedInputLatency = -1;      // -1: report the real round trip
             int reportedOutputLatency = -1;
 
+            juce::Array<double> rejectedRates;  // listed, but open() at them fails (--virtual-reject-rate)
+
             bool paced = false;                 // run an own real-time thread after open()
             double speed = 1.0;                 // paced: how much faster than real time
         };

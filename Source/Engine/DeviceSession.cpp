@@ -120,10 +120,24 @@ namespace rf::engine
         return config;
     }
 
-    DeviceSession::Result DeviceSession::open (const DeviceConfig& wanted, bool openInput)
+    DeviceSession::Result DeviceSession::open (const DeviceConfig& wanted, bool openInput, Mode mode)
     {
         Result result;
+        const auto exact = mode == Mode::exact;
         auto config = resolveDevices (wanted, result.warnings);
+
+        const auto wantedLabel = quoted (wanted.outputDevice.isNotEmpty() ? wanted.outputDevice : wanted.inputDevice);
+        const auto wantedSetup = wanted.sampleRate > 0.0 ? " at " + describeRate (wanted.sampleRate) : juce::String();
+
+        if (exact && (config.typeName != wanted.typeName || config.outputDevice != wanted.outputDevice
+                      || config.inputDevice != wanted.inputDevice))
+        {
+            // Never another device: the one asked for is not listed. Nothing is touched.
+            result.error = wantedLabel + " is not available, so it was not reopened" + wantedSetup;
+            result.config = wanted;
+            result.warnings.clear();
+            return result;
+        }
 
         if (config.typeName.isEmpty())
         {
@@ -156,6 +170,14 @@ namespace rf::engine
         // channels) this is the only open.
         auto attempt = withInputRule (config);
         auto error = device.open (attempt);
+
+        if (error.isNotEmpty() && exact)
+        {
+            device.close();
+            result.error = wantedLabel + " could not be opened" + wantedSetup + " (" + error + ")";
+            result.config = config;
+            return result;
+        }
 
         if (error.isNotEmpty())
         {
@@ -204,6 +226,22 @@ namespace rf::engine
             && config.outputDevice == wanted.outputDevice)
             result.warnings.add ("Buffer size " + juce::String (wanted.bufferSize) + " is not available on " + deviceLabel
                                  + "; using " + juce::String (status.config.bufferSize));
+
+        if (exact && ((wanted.sampleRate > 0.0 && ! juce::approximatelyEqual (status.config.sampleRate, wanted.sampleRate))
+                      || (wanted.bufferSize > 0 && status.config.bufferSize != wanted.bufferSize)))
+        {
+            // It opened, but not as asked (the driver picked the nearest rate or buffer size).
+            const auto rateOff = wanted.sampleRate > 0.0 && ! juce::approximatelyEqual (status.config.sampleRate, wanted.sampleRate);
+            result.error = wantedLabel + " runs at "
+                         + (rateOff ? describeRate (status.config.sampleRate) + " instead of " + describeRate (wanted.sampleRate)
+                                    : "buffer " + juce::String (status.config.bufferSize) + " instead of "
+                                      + juce::String (wanted.bufferSize));
+            result.warnings.clear();
+            config.sampleRate = status.config.sampleRate;
+            config.bufferSize = status.config.bufferSize;
+            result.config = config;
+            return result;
+        }
 
         config.sampleRate = status.config.sampleRate;
         config.bufferSize = status.config.bufferSize;

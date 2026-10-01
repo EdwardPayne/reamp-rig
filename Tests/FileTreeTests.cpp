@@ -65,8 +65,12 @@ namespace rf::test
                 const auto* item = tree.find (id);
                 expect (item->status == FileStatus::queued);
                 expect (item->channel == Channel::left);
-                expect (item->hasChannelChoice() == (item->info.numChannels >= 2));
             }
+
+            // Against the files as added (review 2026-10-01, U10: not hasChannelChoice's own formula).
+            expect (! tree.find (idOf ("mono1.wav"))->hasChannelChoice(), "mono");
+            expect (tree.find (idOf ("stereo1.wav"))->hasChannelChoice(), "stereo");
+            expect (tree.find (idOf ("quad.wav"))->hasChannelChoice(), "four channels: the first two are selectable");
 
             expectEquals (tree.countWithStatus (FileStatus::queued), 5);
 
@@ -95,6 +99,23 @@ namespace rf::test
                 expect (channelOf ("quad.wav") == Channel::left);
                 expect (channelOf ("stereo1.wav") == Channel::left);
                 expect (channelOf ("stereo2.wav") == Channel::left);
+            }
+
+            // Review 2026-10-01, A3: the batch's current file keeps its channel while it records.
+            beginTest ("the channel-locked item (the batch's current file) keeps its channel");
+            {
+                tree.setChannel ({ idOf ("stereo1.wav"), idOf ("stereo2.wav") }, Channel::left);
+                tree.setChannelLock (idOf ("stereo1.wav"));
+                expectEquals ((int) tree.getChannelLock(), (int) idOf ("stereo1.wav"));
+
+                expectEquals (tree.setChannel ({ idOf ("stereo1.wav"), idOf ("stereo2.wav") }, Channel::right), 1);
+                expect (channelOf ("stereo1.wav") == Channel::left, "locked");
+                expect (channelOf ("stereo2.wav") == Channel::right);
+
+                tree.setChannelLock (0);
+                expectEquals (tree.setChannel ({ idOf ("stereo1.wav") }, Channel::right), 1);
+                expect (channelOf ("stereo1.wav") == Channel::right, "unlocked again");
+                tree.setChannel ({ idOf ("stereo1.wav"), idOf ("stereo2.wav") }, Channel::left);
             }
 
             beginTest ("a selection of only mono files changes nothing");

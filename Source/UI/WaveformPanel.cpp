@@ -96,8 +96,10 @@ namespace rf::ui
         auditionStart = 0.0;
         playhead.reset();
 
-        // Reads the header here; the waveform data is built on the cache's thread.
-        thumbnail.setSource (new juce::FileInputSource (file));
+        // Reads the header here; the waveform data is built on the cache's thread. The cache
+        // key includes the file's modification time, so a file edited outside the app is drawn
+        // anew instead of from a stale cache entry (review 2026-10-01, U4).
+        thumbnail.setSource (new juce::FileInputSource (file, true));
 
         setVisibleRange ({ 0.0, duration });
         repaint();
@@ -226,7 +228,9 @@ namespace rf::ui
             recordedLive = false;
             recordedSource = source;
             recordedFile = file;
-            recorded.setSource (new juce::FileInputSource (file));
+            // Hashed with the file time: an overwritten take (same output path) is never shown
+            // from the cache entry of the previous one (U4).
+            recorded.setSource (new juce::FileInputSource (file, true));
         }
 
         repaint();

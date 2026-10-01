@@ -1,3 +1,4 @@
+#include <set>
 #include "Model/BatchQueue.h"
 
 namespace rf::test
@@ -159,8 +160,68 @@ namespace rf::test
                 q.finishCurrent (FileStatus::done);
                 expectEquals ((int) q.advance(), (int) ids[3]);
 
-                q.remove (ids[3]);   // the current one stays (the caller finishes it)
+                expect (! q.remove (ids[3]), "the current one stays (the caller finishes it)");
                 expectEquals ((int) q.getCurrent(), (int) ids[3]);
+                expect (! q.remove (ids[0]), "a finished entry stays as it is");
+                expectEquals (q.countWithOutcome (FileStatus::done), 2);
+            }
+
+            // Review 2026-10-01, A6: removed files leave "File N of M", the ETA and the pauses,
+            // and are reported once so the caller counts and logs them.
+            beginTest ("files removed during the batch: dropped once, out of the total, the ETA and the pauses");
+            {
+                BatchQueue q;
+                q.start (tree);
+                q.advance();                                     // file 1 records
+                const auto gone = std::set<ItemId> { ids[2], ids[3] };
+                const auto listed = [&gone] (ItemId id) { return gone.count (id) == 0; };
+
+                const auto dropped = q.dropMissing (listed);
+                expect (! dropped.current);
+                expect (dropped.positions == std::vector<int> { 2, 3 });
+                expectEquals (q.getTotal(), 3);
+                expectEquals (q.getCurrentIndex(), 0);
+                expectEquals (q.countUnfinishedAfterCurrent(), 2, "no pause is waited for them");
+                expectWithinAbsoluteError (q.getRemainingSeconds (0.0, 0.0), 1.0 + 2.0 + 0.5, 1.0e-9);
+
+                expect (q.dropMissing (listed).positions.empty(), "reported only once");
+
+                q.finishCurrent (FileStatus::done);
+                expectEquals ((int) q.advance(), (int) ids[1]);
+                q.finishCurrent (FileStatus::done);
+                expectEquals ((int) q.advance(), (int) ids[4]);
+            }
+
+            // A2: the current file removed while paused is reported once; once finished as
+            // skipped it is never reported (or counted) again, and Resume moves past it.
+            beginTest ("the current file removed while paused is reported once");
+            {
+                BatchQueue q;
+                q.start (tree);
+                q.advance();
+                q.finishCurrent (FileStatus::done);
+                expectEquals ((int) q.advance(), (int) ids[1]);
+                q.pause();
+
+                const auto listed = [&ids] (ItemId id) { return id != ids[1]; };
+                const auto first = q.dropMissing (listed);
+                expect (first.current);
+                expect (first.positions.empty());
+
+                q.finishCurrent (FileStatus::skipped);          // what the caller does
+
+                for (int i = 0; i < 3; ++i)                     // later list changes (selection, other edits)
+                {
+                    const auto again = q.dropMissing (listed);
+                    expect (! again.current && again.positions.empty(), "not reported again");
+                }
+
+                expectEquals (q.countWithOutcome (FileStatus::skipped), 1);
+
+                q.resume();
+                expect (q.getCurrentEntry() != nullptr && q.getCurrentEntry()->outcome == FileStatus::skipped,
+                        "Resume sees the finished entry and advances past it");
+                expectEquals ((int) q.advance(), (int) ids[2]);
             }
 
             beginTest ("sample-rate groups of consecutive files");

@@ -96,20 +96,46 @@ namespace rf::model
         }
     }
 
-    void BatchQueue::remove (ItemId id)
+    bool BatchQueue::remove (ItemId id)
     {
         for (int i = 0; i < (int) entries.size(); ++i)
         {
-            if (entries[(size_t) i].id != id || i == current)
+            if (entries[(size_t) i].id != id)
                 continue;
+
+            if (i == current || entries[(size_t) i].outcome != FileStatus::queued)
+                return false;
 
             entries.erase (entries.begin() + i);
 
             if (i < current)
                 --current;
 
-            return;
+            return true;
         }
+
+        return false;
+    }
+
+    BatchQueue::Dropped BatchQueue::dropMissing (const std::function<bool (ItemId)>& isListed)
+    {
+        Dropped dropped;
+        const auto before = entries;     // positions refer to the run as it was
+
+        for (int i = 0; i < (int) before.size(); ++i)
+        {
+            const auto& e = before[(size_t) i];
+
+            if (e.outcome != FileStatus::queued || isListed (e.id))
+                continue;
+
+            if (e.id == getCurrent())
+                dropped.current = true;
+            else if (remove (e.id))
+                dropped.positions.push_back (i);
+        }
+
+        return dropped;
     }
 
     int BatchQueue::countWithOutcome (FileStatus s) const noexcept

@@ -5,6 +5,20 @@ Phases are defined in `PROMPT.md` section 8; requirements are numbered per `PROM
 
 ## Status
 
+**Review fixes (2026-10-01, after phase 6, not committed yet).** All 28 findings of
+`docs/REVIEW-2026-10-01.md` are fixed (its Status column says how). Highlights: a take started
+across a stream stop/start begins at sample 0 (E1); a stream restart mid-take is XR, or discards
+the take and pauses the batch when the rate or buffer changed (E2); a cancelled take never leaves
+a file (E3); batch and sync rate switches never fall back to other devices and pause with a
+message instead (A1); the app is built for macOS 11 again (U1); one batch never overwrites its
+own outputs, names keep `# @ , ;` and long names keep their suffix (U2, U3, U5). Verified: clean
+Release build without warnings, 15/15 ctest entries (241 cases, 1745 checks; 214 / 1528 before),
+the three engine regressions failed on the old code and pass now, `--batch-check` with per-file
+rate switching and a 1 s pause PASS, `--virtual-unplug=4:2` PASS, `--sync-check` exact at delays
+37 / 1500 and at 48 / 44.1 / 96 kHz + batch bit-exact, `--virtual-reject-rate=44100` pauses the
+batch with the message, a 2 s real batch on the built-in speakers + mic at -24 dB PASS (no XR),
+`otool` minos 11.0 and `LSMinimumSystemVersion` 11.0, launched without flags and quit cleanly.
+
 | Phase | Scope | Status | Verified | Snapshot |
 |---|---|---|---|---|
 | 1 | Skeleton + theme | **Done** | 2026-09-30, clean Release build, launched, window captured | `docs/phase1.png` (removed in phase 6; see `docs/phase6-empty.png`) |
@@ -697,6 +711,12 @@ phase 4 real-hardware note (informational, superseded by the phase 6 runs); sync
 
 ## Decision log
 
+- 2026-10-01: **Review fixes** (`docs/REVIEW-2026-10-01.md`): sample-rate switches of a batch or
+  a sync run use DeviceSession's exact mode (never another device; a refusal pauses the batch);
+  a device restarted from outside at another rate or buffer size pauses the batch like device
+  loss; a cancelled take whose writer had already finished deletes the file (not kept as Done);
+  one batch never overwrites its own outputs (the second source is auto-numbered under every
+  policy); output names are limited to 240 UTF-8 bytes so the hidden temp name fits 255.
 - 2026-10-01: **NC files are redoable once synced**: "Redo files with warnings" includes NC files
   whose device configuration has a measurement by now; the tooltip says so.
 - 2026-10-01: **Stored measurements**: a small secondary "Forget" in SYNC deletes the current

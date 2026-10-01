@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.22)
 
+# The minimum macOS version must be set before project(): project() creates the cache entry
+# (empty unless MACOSX_DEPLOYMENT_TARGET is set), and an empty one makes the compiler target the
+# build machine's macOS, so the app would not launch on older systems. A value given with -D
+# is kept; an empty entry left by an older configure of this build folder is replaced.
+if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version" FORCE)
+endif()
+
 # JUCE 9 requires C to be enabled alongside C++ (it builds its bundled zlib/libpng/flac as C).
 project(ReampRig VERSION 0.1.0 LANGUAGES C CXX)
 
@@ -10,7 +18,6 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -45,10 +52,10 @@ endif()
 # JUCE (fetched at configure time; nothing needs to be installed)
 include(FetchContent)
 
-set(REAMPFORGE_JUCE_VERSION 9.0.3)
+set(REAMPRIG_JUCE_VERSION 9.0.3)
 
 FetchContent_Declare(JUCE
-    URL      https://github.com/juce-framework/JUCE/archive/refs/tags/${REAMPFORGE_JUCE_VERSION}.tar.gz
+    URL      https://github.com/juce-framework/JUCE/archive/refs/tags/${REAMPRIG_JUCE_VERSION}.tar.gz
     URL_HASH SHA256=a81e5508b8a0efa483917794ebeaff56aed3075730c405a947734413f40c1aba
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 
@@ -72,7 +79,7 @@ set_target_properties(ReampRigAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 #===============================================================================
 # Model sources (no GUI, no audio thread). Compiled into both the app and the tests;
 # JUCE modules are compiled per target, so a shared static library would duplicate them.
-set(REAMPFORGE_MODEL_SOURCES
+set(REAMPRIG_MODEL_SOURCES
     Source/Model/BatchQueue.cpp
     Source/Model/FileItem.cpp
     Source/Model/FileTree.cpp
@@ -81,7 +88,7 @@ set(REAMPFORGE_MODEL_SOURCES
 
 # Engine sources without a hardware dependency (compiled into the app and the tests).
 # JuceAudioDevice (the real device) is app-only; the tests use the fake and loopback devices.
-set(REAMPFORGE_ENGINE_SOURCES
+set(REAMPRIG_ENGINE_SOURCES
     Source/Engine/DeviceSession.cpp
     Source/Engine/DuplexEngine.cpp
     Source/Engine/FileWriter.cpp
@@ -105,7 +112,10 @@ juce_add_gui_app(ReampRig
     ICON_BIG                      "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Icon/icon_1024.png"
     ICON_SMALL                    "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Icon/icon_32.png"
     NEEDS_WEB_BROWSER             FALSE
-    NEEDS_CURL                    FALSE)
+    NEEDS_CURL                    FALSE
+    # JUCE does not write the minimum macOS version into Info.plist; Finder and Launch Services
+    # read it from there (the binary's own minimum comes from CMAKE_OSX_DEPLOYMENT_TARGET).
+    PLIST_TO_MERGE                "<plist><dict><key>LSMinimumSystemVersion</key><string>${CMAKE_OSX_DEPLOYMENT_TARGET}</string></dict></plist>")
 
 target_sources(ReampRig PRIVATE
     Source/Main.cpp
@@ -131,8 +141,8 @@ target_sources(ReampRig PRIVATE
     Source/UI/StatusBar.cpp
     Source/UI/Meters.cpp
     Source/Engine/JuceAudioDevice.cpp
-    ${REAMPFORGE_ENGINE_SOURCES}
-    ${REAMPFORGE_MODEL_SOURCES})
+    ${REAMPRIG_ENGINE_SOURCES}
+    ${REAMPRIG_MODEL_SOURCES})
 
 if(APPLE)
     target_sources(ReampRig PRIVATE
@@ -177,16 +187,17 @@ endif()
 
 #===============================================================================
 # Tests (JUCE UnitTest, run through ctest). See ARCHITECTURE.md, "Tests".
-option(REAMPFORGE_BUILD_TESTS "Build the unit tests" ON)
+option(REAMPRIG_BUILD_TESTS "Build the unit tests" ON)
 
-if(REAMPFORGE_BUILD_TESTS)
+if(REAMPRIG_BUILD_TESTS)
     enable_testing()
 
     juce_add_console_app(ReampRigTests
         PRODUCT_NAME "Reamp Rig Tests")
 
-    target_sources(ReampRigTests PRIVATE
-        Tests/TestMain.cpp
+    # One file per test category: Tests/<Category>Tests.cpp holds the UnitTest whose category
+    # is <Category>. Adding a file here is all it takes to build and register it with ctest.
+    set(REAMPRIG_TEST_SOURCES
         Tests/FileTreeTests.cpp
         Tests/FolderScannerTests.cpp
         Tests/FileTreeViewTests.cpp
@@ -201,19 +212,27 @@ if(REAMPFORGE_BUILD_TESTS)
         Tests/BatchQueueTests.cpp
         Tests/SyncTests.cpp
         Tests/KeyboardTests.cpp
+        Tests/CommandLineTests.cpp)
+
+    target_sources(ReampRigTests PRIVATE
+        Tests/TestMain.cpp
+        ${REAMPRIG_TEST_SOURCES}
+        Source/App/CommandLine.cpp
         Source/App/Settings.cpp
         Source/UI/ConfirmDialog.cpp
         Source/UI/Fonts.cpp
         Source/UI/LookAndFeel.cpp
         Source/UI/FileTreeView.cpp
-        ${REAMPFORGE_ENGINE_SOURCES}
-        ${REAMPFORGE_MODEL_SOURCES})
+        ${REAMPRIG_ENGINE_SOURCES}
+        ${REAMPRIG_MODEL_SOURCES})
 
     target_include_directories(ReampRigTests PRIVATE Source Tests)
 
+    # JUCE_MODAL_LOOPS_PERMITTED: the tests pump the message loop (runDispatchLoopUntil) to
+    # receive results posted with MessageManager::callAsync (FolderScanner::scanAsync).
     target_compile_definitions(ReampRigTests PRIVATE
-        JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0)
+        JUCE_USE_CURL=0
+        JUCE_MODAL_LOOPS_PERMITTED=1)
 
     target_link_libraries(ReampRigTests
         PRIVATE
@@ -229,8 +248,11 @@ if(REAMPFORGE_BUILD_TESTS)
             juce::juce_recommended_config_flags
             juce::juce_recommended_warning_flags)
 
-    foreach(_rf_category FolderScanner FileTree FileTreeView Settings DeviceSession DuplexEngine SourceLoader
-                         Resampler Loopback Take OutputNaming BatchQueue Sync Keyboard)
+    # One ctest entry per category, derived from the file names above (Tests/TakeTests.cpp ->
+    # "Take"), so a test file can never be built but silently left out of ctest.
+    foreach(_rf_test_source ${REAMPRIG_TEST_SOURCES})
+        get_filename_component(_rf_category "${_rf_test_source}" NAME_WE)
+        string(REGEX REPLACE "Tests$" "" _rf_category "${_rf_category}")
         add_test(NAME ${_rf_category}
                  COMMAND ReampRigTests --category=${_rf_category})
     endforeach()

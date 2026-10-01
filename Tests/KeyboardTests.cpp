@@ -12,9 +12,9 @@ namespace rf::test
         - the confirmation dialog takes Return (confirm) and Escape (cancel) and swallows every
           other key (Space, Delete, L, R) so nothing reaches the list or audition behind it;
           command shortcuts pass on to the application;
-        - the file list keeps cmd-A and L / R working while a batch runs (the window-level
-          Space handler refuses audition then; that path is covered by code review: it only
-          shows a status-bar message);
+        - the file list keeps cmd-A and L / R working while a batch runs, except that the file
+          being recorded keeps its channel (the window-level Space handler refuses audition
+          then; that path is covered by code review: it only shows a status-bar message);
         - collapsing a folder group deselects its files, and cmd-A selects the visible files
           only, so bulk actions never reach hidden rows (decision 2026-10-01).
     */
@@ -115,15 +115,26 @@ namespace rf::test
             const auto press = [&list] (const juce::KeyPress& k) { return list.keyPressed (k); };
             const auto cmdA = juce::KeyPress ('a', juce::ModifierKeys::commandModifier, 'a');
 
-            beginTest ("batch running: cmd-A and L / R still work on the list");
+            // As the batch sets it up (BatchController::beginFile): ids[0] is recording, so its
+            // channel is locked; the keys still work on every other file (review 2026-10-01, A3,
+            // U10: this used to pass whatever the batch state was).
+            beginTest ("batch running: cmd-A and L / R work on the list, except on the file being recorded");
             view.setBatchState (ids[0], true);
+            tree.setChannelLock (ids[0]);
             expect (press (cmdA));
             expectEquals (tree.getNumSelected(), 4);
             expect (press (juce::KeyPress ('r', {}, 'r')));
             expect (tree.find (ids[3])->channel == Channel::right);
+            expect (tree.find (ids[1])->channel == Channel::right);
+            expect (tree.find (ids[0])->channel == Channel::left, "the current file keeps the channel it records");
             expect (press (juce::KeyPress ('l', {}, 'l')));
             expect (tree.find (ids[3])->channel == Channel::left);
+            tree.setChannelLock (0);
             view.setBatchState (0, false);
+
+            expect (press (juce::KeyPress ('r', {}, 'r')));
+            expect (tree.find (ids[0])->channel == Channel::right, "after the batch it changes again");
+            expect (press (juce::KeyPress ('l', {}, 'l')));
 
             beginTest ("collapsing a group deselects its files; cmd-A then selects the visible files only");
             expect (press (cmdA));

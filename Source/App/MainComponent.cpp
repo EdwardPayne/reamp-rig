@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "../Model/OutputNaming.h"
 #include "../Engine/LoopbackTestDevice.h"
 #include "../UI/Format.h"
 #include "../UI/LookAndFeel.h"
@@ -67,6 +68,8 @@ namespace rf::app
                 o.sampleRates = launch.virtualRates;
                 o.defaultSampleRate = launch.virtualRates.getFirst();
             }
+
+            o.rejectedRates = launch.virtualRejectRates;
 
             return std::make_unique<engine::LoopbackTestDevice> (o);
         }
@@ -174,8 +177,14 @@ namespace rf::app
 
         juce::Component::SafePointer<MainComponent> safeThis (this);
 
-        // Results "next to the source" live in the DESTINATION subfolder (default "Reamped");
-        // a recursive scan never picks them up as sources.
+        // Results live in the DESTINATION subfolder next to each source (default "Reamped") or
+        // in the single output folder; a recursive scan never picks them up as sources. Only
+        // the rule of the active mode applies (a source folder that happens to be called
+        // "Reamped" is scanned in single-folder mode), and the subfolder name is the one used
+        // on disk (OutputNaming::subfolderName).
+        const auto naming = settings.getNamingOptions();
+        const auto singleFolder = naming.mode == model::DestinationMode::singleFolder;
+
         scanner.scanAsync (paths, settings.getIncludeSubfolders(),
                            [safeThis, done = std::move (onAdded)] (model::ScanResult result)
         {
@@ -187,7 +196,8 @@ namespace rf::app
             if (done != nullptr)
                 done();
         },
-                           settings.getSubfolderName());
+                           singleFolder ? juce::String() : model::OutputNaming::subfolderName (naming),
+                           singleFolder ? naming.outputFolder : juce::File());
     }
 
     void MainComponent::handleScanResult (const model::ScanResult& result)

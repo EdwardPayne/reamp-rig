@@ -86,11 +86,16 @@ namespace rf::app
             microphone-denied message). */
         bool checkCanRecord (const juce::String& action = "start");
 
-        /** Reopens the device at `rate` for the batch (not saved). Returns the rate it runs at. */
-        double switchSampleRate (double rate);
+        /** Reopens the running device at `rate` for a batch or a sync run (not saved), in
+            DeviceSession's exact mode: never another device, never another rate. Returns an
+            empty string on success, else a plain-language error naming the device and the rate;
+            the device is then reopened at its previous rate if it can be (review 2026-10-01, A1). */
+        juce::String switchSampleRate (double rate);
 
-        /** Reopens `config` (not saved) if the device differs from it, e.g. after a batch
-            switched the sample rate. */
+        /** After a batch or a sync run that switched the sample rate: puts the rate and buffer
+            size of `config` back on the device that runs now. If the device changed meanwhile
+            (the preferred device came back while a batch was paused), the preferred
+            configuration is reopened instead, so the reconnection is never undone (A4). */
         void restoreConfig (const engine::DeviceConfig&);
 
         /** While a batch runs: audition is stopped and the AUDIO controls are disabled (the
@@ -126,6 +131,12 @@ namespace rf::app
             (onDeviceStopped) and a running sync measurement (onSyncDeviceStopped). */
         std::function<void()> onDeviceStopped, onSyncDeviceStopped;
 
+        /** Called when the open device restarted by itself with another sample rate or buffer
+            size (changed outside the app, e.g. in Audio MIDI Setup), message thread, with a
+            description ("Apollo Twin now runs at 44.1 kHz · 256 (was 48 kHz · 256)"). The batch
+            pauses as on device loss and Sync stops (review 2026-10-01, E2). */
+        std::function<void (const juce::String&)> onDeviceReconfigured, onSyncDeviceReconfigured;
+
         /** Called when a device that had been lost (or was missing at launch) is open again
             (message thread), with its description. */
         std::function<void (const juce::String&)> onDeviceReopened;
@@ -142,9 +153,12 @@ namespace rf::app
         void audioDeviceChanged() override;
         void timerCallback() override;
         void deviceLost();
+        void deviceReconfigured (const engine::DeviceStatus&);
+        bool checkReconfigured (const engine::DeviceStatus&);
         void checkReconnect();
 
-        void applyConfig (const engine::DeviceConfig& wanted, bool persist);
+        engine::DeviceSession::Result applyConfig (const engine::DeviceConfig& wanted, bool persist,
+                                                   engine::DeviceSession::Mode = engine::DeviceSession::Mode::withFallback);
         void requestMicrophoneIfNeeded();
         void showMicrophoneDenied();
         void refreshDeviceUi();
@@ -176,6 +190,8 @@ namespace rf::app
         engine::ReconnectWatch reconnect;
         int slowTicks = 0;
         bool deviceWasOpen = false;
+        double knownRate = 0.0;                 // rate and buffer the device ran at when last seen by us
+        int knownBufferSize = 0;
         bool applying = false;
         const bool needsPermission;
         bool outputOnly = false;                // --no-input

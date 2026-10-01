@@ -33,7 +33,8 @@ namespace rf::app
         views.sync.getSyncButton().onClick = [this] { toggle(); };
         views.sync.getForgetButton().onClick = [this] { forget(); };
         audio.onSyncSnapshot = [this] (const engine::EngineSnapshot& snap) { handleSnapshot (snap); };
-        audio.onSyncDeviceStopped = [this] { deviceStopped(); };
+        audio.onSyncDeviceStopped = [this] { deviceStopped ({}); };
+        audio.onSyncDeviceReconfigured = [this] (const juce::String& what) { deviceStopped (what); };
 
         refreshControls();
     }
@@ -43,6 +44,7 @@ namespace rf::app
         alive->store (false);
         audio.onSyncSnapshot = nullptr;
         audio.onSyncDeviceStopped = nullptr;
+        audio.onSyncDeviceReconfigured = nullptr;
         views.sync.getLevelSlider().onValueChange = nullptr;
         views.sync.getSyncButton().onClick = nullptr;
         views.sync.getForgetButton().onClick = nullptr;
@@ -249,7 +251,7 @@ namespace rf::app
         });
     }
 
-    void SyncController::deviceStopped()
+    void SyncController::deviceStopped (const juce::String& reconfigured)
     {
         if (! measurer.isRunning())
             return;
@@ -259,18 +261,35 @@ namespace rf::app
         views.sync.setMeasuring (false);
 
         const auto where = audio.describeKey (measuringKey);
-        const auto text = juce::String ("Sync stopped: the audio device stopped or was disconnected. Nothing was stored.");
-        views.sync.setFailure ("Sync failed: the device stopped. Nothing was stored.",
-                               "The device of " + where + " stopped during the measurement. It reopens by itself when it is "
-                               "back; then press Sync again.",
-                               colour::error);
-        views.statusBar.setMessage (text + " It reopens by itself when it is back; then press Sync again.", Tone::error);
-        juce::Logger::writeToLog ("Sync failed (device stopped) for " + where);
+
+        if (reconfigured.isNotEmpty())
+        {
+            // Restarted with another rate or buffer size (review 2026-10-01, E2): the round trip
+            // of the configuration being measured is no longer what comes back.
+            views.sync.setFailure ("Sync failed: the device changed. Nothing was stored.",
+                                   reconfigured + " during the measurement of " + where + ". Press Sync again to measure "
+                                   "the configuration the device runs in now.",
+                                   colour::error);
+            views.statusBar.setMessage ("Sync stopped: " + reconfigured + ", changed outside Reamp Rig. Nothing was stored. "
+                                        "Press Sync again.", Tone::error);
+            juce::Logger::writeToLog ("Sync failed (device changed: " + reconfigured + ") for " + where);
+        }
+        else
+        {
+            const auto text = juce::String ("Sync stopped: the audio device stopped or was disconnected. Nothing was stored.");
+            views.sync.setFailure ("Sync failed: the device stopped. Nothing was stored.",
+                                   "The device of " + where + " stopped during the measurement. It reopens by itself when it is "
+                                   "back; then press Sync again.",
+                                   colour::error);
+            views.statusBar.setMessage (text + " It reopens by itself when it is back; then press Sync again.", Tone::error);
+            juce::Logger::writeToLog ("Sync failed (device stopped) for " + where);
+        }
 
         if (check.active)
         {
             check.allOk = false;
-            printCheck ("FAIL: the device stopped during the measurement");
+            printCheck (reconfigured.isNotEmpty() ? "FAIL: the device changed during the measurement: " + reconfigured
+                                                  : juce::String ("FAIL: the device stopped during the measurement"));
             ++check.index;
             juce::MessageManager::callAsync ([this, flag = alive]
             {
@@ -449,7 +468,23 @@ namespace rf::app
             }
 
             printCheck ("switching the device to " + format::sampleRate (rate));
-            audio.switchSampleRate (rate);
+
+            // Exact switch (review 2026-10-01, A1): a refused rate fails this measurement; it never
+            // measures (and stores) the system default devices under another key instead.
+            if (const auto error = audio.switchSampleRate (rate); error.isNotEmpty())
+            {
+                printCheck ("FAIL: " + error);
+                views.statusBar.setMessage ("Sync check: could not switch the device to " + format::sampleRate (rate) + ": " + error,
+                                            Tone::error);
+                check.allOk = false;
+                ++check.index;
+                juce::MessageManager::callAsync ([this, flag = alive]
+                {
+                    if (flag->load())
+                        checkNext();
+                });
+                return;
+            }
         }
 
         printCheck ("measuring " + audio.describeKey (engine::SyncKey::from (audio.getDeviceStatus())) + ellipsis());

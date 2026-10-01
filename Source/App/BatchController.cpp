@@ -99,6 +99,19 @@ namespace rf::app
                               "with the interrupted file on Resume. Stop ends the batch instead.");
         };
 
+        // Restarted from outside with another rate or buffer size (review 2026-10-01, E2): the
+        // take's latency and rate no longer match, so the batch pauses as on device loss.
+        audio.onDeviceReconfigured = [this] (const juce::String& what)
+        {
+            if (queue.getState() == model::BatchQueue::State::running)
+                pauseBecause ("Paused: " + what + ", changed outside Reamp Rig. Press Resume to record the interrupted "
+                              "file again from its start (each file switches the rate it needs).",
+                              Tone::warning,
+                              "The sample rate or buffer size was changed in Audio MIDI Setup or the interface's own "
+                              "software during the batch. The take in progress was discarded: its latency compensation "
+                              "and rate no longer matched. Files already Done are kept.");
+        };
+
         // A device that came back is not switched under a running batch (e.g. one that runs on
         // a fallback device); a batch paused by the loss waits for Resume.
         audio.isBatchRunning = [this] { return queue.getState() == model::BatchQueue::State::running; };
@@ -139,6 +152,7 @@ namespace rf::app
 
         audio.onSnapshot = nullptr;
         audio.onDeviceStopped = nullptr;
+        audio.onDeviceReconfigured = nullptr;
         audio.isBatchRunning = nullptr;
         audio.onDeviceReopened = nullptr;
 
@@ -208,6 +222,7 @@ namespace rf::app
         startConfig.sampleRate = status.config.sampleRate;
         startConfig.bufferSize = status.config.bufferSize;
 
+        written.clear();
         log = {};
         logTried = false;
         startedMs = juce::Time::getMillisecondCounterHiRes();
@@ -287,12 +302,22 @@ namespace rf::app
             pausedTotalMs += now - pausedSinceMs;
             queue.resume();
             phase = Phase::idle;
-            currentId = queue.getCurrent();
-            updateTransport();
 
             // The interrupted take (or a device that just came back) may still ring through the
             // amp: Resume waits the pause between files once more before recording.
             settleUntilMs = now + pauseBetweenSeconds * 1000.0;
+
+            // The paused file was removed from the list meanwhile (already counted as skipped):
+            // go on with the next one, after the same wait.
+            if (const auto* entry = queue.getCurrentEntry(); entry == nullptr || entry->outcome != FileStatus::queued)
+            {
+                updateTransport();
+                next();
+                return;
+            }
+
+            currentId = queue.getCurrent();
+            updateTransport();
 
             if (pauseBetweenSeconds > 0.0 && currentId != 0)
                 startWaiting();
@@ -324,6 +349,7 @@ namespace rf::app
             endWaiting();
 
         cancelCurrent();
+        lockChannelOf (0);
 
         if (currentId != 0)
             tree.setResult (currentId, FileStatus::queued, 0.0, 0, {}, {});
@@ -460,6 +486,7 @@ namespace rf::app
     {
         take.reset();
         phase = Phase::idle;
+        lockChannelOf (0);
         currentId = queue.advance();
 
         if (currentId == 0)
@@ -554,12 +581,19 @@ namespace rf::app
 
         if (item == nullptr)
         {
-            queue.finishCurrent (FileStatus::skipped);   // removed from the list meanwhile
-            next();
+            dropRemovedEntries();   // removed from the list meanwhile: counted, logged, next file
             return;
         }
 
-        target = model::OutputNaming::resolve (item->file, item->root, channelTag (*item), naming);
+        // The channel as it is now is the one this file is recorded with (A3); it stays locked
+        // until the file is finished.
+        lockChannelOf (currentId);
+        channelSnapshotOf = currentId;
+        currentChannel = channelIndex (*item);
+        currentTag = channelTag (*item);
+        currentChannelText = channelText (*item);
+
+        target = model::OutputNaming::resolve (item->file, item->root, currentTag, naming, written);
 
         if (! logTried)
         {
@@ -585,7 +619,28 @@ namespace rf::app
             && status.sampleRates.contains (fileRate))
         {
             views.statusBar.setMessage ("Switching the device to " + format::sampleRate (fileRate) + ellipsis());
-            audio.switchSampleRate (fileRate);
+
+            // Exact switch (review 2026-10-01, A1): the same device at this rate, or a pause. It
+            // never continues on the system default devices.
+            if (const auto error = audio.switchSampleRate (fileRate); error.isNotEmpty())
+            {
+                log.append ({ "      Sample-rate switch to " + format::sampleRate (fileRate) + " failed: " + error + "; batch paused" });
+                pauseBecause ("Paused: the device could not switch to " + format::sampleRate (fileRate) + " for "
+                                  + item->file.getFileName() + ". " + error + ". Nothing was recorded on another device. "
+                                  "Check the interface, then press Resume (the file is recorded from its start), or Stop.",
+                              Tone::error, error);
+
+                // --batch-check: nothing would resume it (the device keeps refusing the rate).
+                if (check.active)
+                {
+                    printCheck ("rate switch refused: the batch paused instead of continuing on another device; "
+                                "the check stops it");
+                    stop();
+                }
+
+                return;
+            }
+
             status = audio.getDeviceStatus();
         }
 
@@ -599,13 +654,12 @@ namespace rf::app
         views.fileList.setBatchState (currentId, true);
         latencyNote = {};
 
-        const auto channel = channelIndex (*item);
-        views.waveform.setSource (item->file, item->info.numChannels, fileRate, item->info.lengthInSamples, channel);
+        views.waveform.setSource (item->file, item->info.numChannels, fileRate, item->info.lengthInSamples, currentChannel);
         views.waveform.clearRecorded();
         views.waveform.setPlayhead (0.0);
         lastProgress = -1.0;
 
-        currentRequest = makeRequest (*item, status.config.sampleRate);
+        currentRequest = { item->file, currentChannel, status.config.sampleRate };
         phase = Phase::loading;
         updateStatusLine();
 
@@ -681,8 +735,7 @@ namespace rf::app
 
         if (item == nullptr)
         {
-            queue.finishCurrent (FileStatus::skipped);
-            next();
+            dropRemovedEntries();
             return;
         }
 
@@ -775,6 +828,24 @@ namespace rf::app
             take.reset();
             return;   // paused: the file is recorded again on Resume
         }
+
+        if (r.deviceChanged)
+        {
+            // The stream came back at another rate or buffer size (E2): the take was discarded.
+            // Pause as on device loss; Resume records the file again at the rate it needs.
+            take.reset();
+            const auto now = audio.getDeviceStatus();
+            const auto* item = tree.find (currentId);
+            log.append ({ "      Take discarded: " + r.error + "; batch paused" });
+            pauseBecause ("Paused: the audio device restarted at " + format::sampleRate (now.config.sampleRate) + ", buffer "
+                              + juce::String (now.config.bufferSize) + " during "
+                              + (item != nullptr ? item->file.getFileName() : juce::String ("the take"))
+                              + " (was " + format::sampleRate (spec.deviceRate) + ", buffer "
+                              + juce::String (takeStatus.config.bufferSize) + "). Press Resume to record it again from its start.",
+                          Tone::warning, r.error);
+            return;
+        }
+
         const auto now = audio.getDeviceStatus();
         const auto xruns = (xrunsAtStart >= 0 && now.xrunCount > xrunsAtStart) ? now.xrunCount - xrunsAtStart : 0;
 
@@ -807,11 +878,20 @@ namespace rf::app
 
         if (r.hadDropout() || xruns > 0)
             details.add ("Dropouts: " + juce::String (xruns) + " driver xruns, " + juce::String (r.callbackGaps) + " callback gaps, "
+                         + juce::String (r.streamRestarts) + " stream restarts, "
                          + juce::String (r.droppedSamples) + " samples lost to a full record buffer, "
                          + juce::String (r.paddedSamples) + " samples padded");
 
+        // A name another source of this batch had already taken (U2): numbered, and said so.
+        if (target.note.isNotEmpty())
+            details.add ("Name: " + target.note);
+
+        if (r.ok)
+            written.insert (r.file);
+
         processedSeconds += (double) r.length / fileRate;
         check.deviceRates[currentId] = spec.deviceRate;
+        check.channels[currentId] = currentChannel;
 
         // NC files become redoable once the configuration of this take is synced.
         if (r.notCalibrated)
@@ -853,7 +933,8 @@ namespace rf::app
             return;
 
         const auto sourceFile = item->file;
-        const auto channel = channelText (*item);
+        // The channel the file was recorded with (A3); a file skipped before it began has none yet.
+        const auto channel = channelSnapshotOf == currentId ? currentChannelText : channelText (*item);
         const auto rate = item->info.sampleRate;
 
         tree.setResult (currentId, status, status == FileStatus::done ? 1.0 : 0.0, warnings, output, note);
@@ -944,6 +1025,7 @@ namespace rf::app
         preloaded.reset();
         phase = Phase::idle;
         currentId = 0;
+        lockChannelOf (0);
 
         views.fileList.setBatchState (0, false);
         views.waveform.setPlayhead (std::nullopt);
@@ -1091,25 +1173,67 @@ namespace rf::app
     //==============================================================================
     void BatchController::fileTreeChanged()
     {
-        // The current file may have been removed from the list; handled outside this
+        // Files of the run may have been removed from the list; handled outside this
         // notification (the batch changes the list itself).
-        if (queue.isActive() && currentId != 0)
+        if (queue.isActive())
             triggerAsyncUpdate();
     }
 
     void BatchController::handleAsyncUpdate()
     {
-        if (! queue.isActive() || currentId == 0 || tree.find (currentId) != nullptr)
+        if (queue.isActive())
+            dropRemovedEntries();
+    }
+
+    void BatchController::dropRemovedEntries()
+    {
+        // Every entry of this run still waiting whose file is gone from the list is skipped once:
+        // counted, logged, and left out of "File N of M", the ETA and the pauses (A6). Entries
+        // that are finished are never looked at again (A2).
+        const auto total = queue.getTotal();          // as in the log lines so far
+        const auto dropped = queue.dropMissing ([this] (model::ItemId id) { return tree.find (id) != nullptr; });
+
+        for (const auto position : dropped.positions)
+        {
+            ++numSkipped;
+            log.append ({ "[" + juce::String (position + 1) + "/" + juce::String (total) + "] removed from the list "
+                          "during the batch; skipped" });
+        }
+
+        const auto currentRemoved = dropped.current;
+
+        if (! currentRemoved)
+        {
+            updateStatusLine();
             return;
+        }
+
+        // The current file: its take (or the wait before it) ends here.
+        if (phase == Phase::waiting)
+            endWaiting();        // the wait so far counts as waiting, not as active time (A8)
 
         cancelCurrent();
+        lockChannelOf (0);
+        log.append ({ "[" + juce::String (queue.getCurrentIndex() + 1) + "/" + juce::String (total)
+                      + "] removed from the list during the batch; skipped" });
         queue.finishCurrent (FileStatus::skipped);
         ++numSkipped;
-        log.append ({ "[" + juce::String (queue.getCurrentIndex() + 1) + "/" + juce::String (queue.getTotal())
-                      + "] removed from the list during the batch; skipped" });
 
         if (queue.getState() == model::BatchQueue::State::running)
+        {
             next();
+        }
+        else
+        {
+            // Paused: nothing is current any more; Resume goes on with the next file.
+            currentId = 0;
+            updateTransport();
+        }
+    }
+
+    void BatchController::lockChannelOf (model::ItemId id)
+    {
+        tree.setChannelLock (id);
     }
 
     //==============================================================================
@@ -1244,7 +1368,7 @@ namespace rf::app
                 src->read (&a, 0, n, 0, true, true);
                 out->read (&b, 0, (int) juce::jmin ((juce::int64) n, out->lengthInSamples), 0, true, false);
 
-                const auto ch = channelIndex (*item);
+                const auto ch = check.channels.count (id) > 0 ? check.channels[id] : channelIndex (*item);
                 const auto resampled = (item->warnings & Warning::resampled) != 0;
                 const auto oneLsb = std::ldexp (1.0f, -(int) (out->bitsPerSample - 1));
 

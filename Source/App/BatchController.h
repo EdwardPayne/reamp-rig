@@ -44,8 +44,13 @@ namespace rf::app
         - After each take: Done / Error with warnings (not calibrated, resampled, dropout from
           xruns, callback gaps or FIFO overflow, silence, clipping), one sidecar-log entry.
         - Pause discards the current take and redoes that file from its start on Resume; Skip
-          marks it Skipped; Stop discards it and leaves it Queued. A device that stops pauses
-          the batch. At the end the device's original sample rate is restored.
+          marks it Skipped; Stop discards it and leaves it Queued. A device that stops, one
+          that restarts with another rate or buffer size, and a rate switch the device refuses
+          pause the batch (a refused switch never falls back to another device). At the end
+          the device's original sample rate is restored (on the device that runs then).
+        - Files removed from the list during the batch are counted and logged as skipped; the
+          current file's L/R channel is locked while it records; one batch never overwrites
+          its own outputs (a second source that maps to the same name is numbered).
         - Pause between files (phase 6, OPTIONS, default 2 s): after a take the next one starts
           only when that much time has passed (a message-thread timer, never a sleep), so amp
           and reverb tails die out; the status line counts down ("File 4 of 7 — next in 2 s"),
@@ -131,6 +136,8 @@ namespace rf::app
                          const juce::StringArray& details = {});
         void preloadNext();
         void cancelCurrent();
+        void dropRemovedEntries();
+        void lockChannelOf (model::ItemId);
         void pauseBecause (const juce::String& message, ui::StatusBar::Tone, const juce::String& detail = {});
         void finishBatch (bool stopped);
         void handleSnapshot (const engine::EngineSnapshot&);
@@ -162,6 +169,12 @@ namespace rf::app
 
         Phase phase = Phase::idle;
         model::ItemId currentId = 0;
+        // The current file's channel as it was when the file began (A3): the take, its _L/_R tag,
+        // the row and the log all use this, and the list keeps it locked meanwhile.
+        model::ItemId channelSnapshotOf = 0;    // the file the three below belong to
+        int currentChannel = 0;
+        std::optional<model::Channel> currentTag;
+        juce::String currentChannelText;
         engine::LoadRequest currentRequest, pendingRequest, preloadedRequest;
         std::shared_ptr<const engine::LoadedSource> preloaded;
         model::OutputNaming::Target target;
@@ -173,6 +186,7 @@ namespace rf::app
 
         // Batch-wide
         model::NamingOptions naming;
+        model::OutputNaming::WrittenSet written;    // outputs of this batch (U2: never overwritten by it)
         int bitsPerSample = 24, tailMs = 0;
         engine::DeviceConfig startConfig;
         std::vector<engine::SyncKey> plannedKeys;   // configurations of this run (log header)
@@ -192,6 +206,7 @@ namespace rf::app
             std::function<void (bool)> onDone;
             std::vector<model::ItemId> handled;
             std::map<model::ItemId, double> deviceRates;   // device rate each take ran at
+            std::map<model::ItemId, int> channels;         // channel each take played
         };
 
         Check check;

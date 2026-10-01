@@ -45,12 +45,15 @@ namespace rf::model
         recursing. Files in a scanned folder whose extension is not an audio format are
         ignored silently; a file with an audio extension that cannot be opened, and any
         explicitly given file that is not readable audio, is reported in `skipped`.
-        The same file (by absolute path) is never returned twice.
+        The same file is never returned twice (by fileIdentity: device and inode where
+        available, else the absolute path).
 
-        Output subfolders are never sources (phase 6): while recursing, a subfolder whose name
-        equals `outputSubfolderName` (the DESTINATION "Subfolder" name, e.g. "Reamped";
-        compared case-insensitively where the file system is) is not entered and is listed in
-        `skippedOutputFolders` instead. A folder the user adds directly is always scanned.
+        Output folders are never sources (phase 6): while recursing, a subfolder whose name
+        equals `outputSubfolderName` (the DESTINATION "Subfolder" name as used on disk, e.g.
+        "Reamped"; compared case-insensitively where the platform's names are), or that is
+        `outputFolder` itself (the single output folder, review 2026-10-01 U9), is not entered
+        and is listed in `skippedOutputFolders` instead. The app passes the one that matches
+        the destination mode. A folder the user adds directly is always scanned.
 
         scan() is synchronous and thread-agnostic (used by tests). scanAsync() runs it on the
         scanner's own background thread and delivers the result on the message thread.
@@ -66,7 +69,8 @@ namespace rf::model
         static ScanResult scan (const juce::Array<juce::File>& inputs, bool recursive,
                                 juce::AudioFormatManager& formats,
                                 const std::function<bool()>& shouldAbort = {},
-                                const juce::String& outputSubfolderName = {});
+                                const juce::String& outputSubfolderName = {},
+                                const juce::File& outputFolder = {});
 
         /** Reads the header of one file. Returns false and sets `reason` if it is not usable. */
         static bool readInfo (const juce::File&, juce::AudioFormatManager&, AudioFileInfo& info, juce::String& reason);
@@ -76,7 +80,7 @@ namespace rf::model
         /** Queues a scan on the background thread; `onDone` is called on the message thread
             (never after this scanner has been destroyed). Scans complete in the order queued. */
         void scanAsync (juce::Array<juce::File> inputs, bool recursive, Callback onDone,
-                        juce::String outputSubfolderName = {});
+                        juce::String outputSubfolderName = {}, juce::File outputFolder = {});
 
         /** Number of queued or running scans whose results have not been delivered yet. */
         int getNumPending() const noexcept   { return pending; }

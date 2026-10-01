@@ -105,7 +105,9 @@ namespace rf::engine
         if (current == nullptr)
             return;
 
-        command.store (nullptr, std::memory_order_release);
+        // seq_cst with the callbackCount load in retire() (and the audio thread's command load
+        // and count increment): the count must not be read before this store is visible.
+        command.store (nullptr, std::memory_order_seq_cst);
         retire (std::move (current));
     }
 
@@ -126,7 +128,7 @@ namespace rf::engine
     {
         // The audio thread may be inside a callback that loaded `c` before the store above.
         // Every callback that could have seen it has finished once the count moves past this.
-        retired.emplace_back (std::move (c), callbackCount.load (std::memory_order_acquire));
+        retired.emplace_back (std::move (c), callbackCount.load (std::memory_order_seq_cst));
         releaseRetired();
     }
 
@@ -165,6 +167,8 @@ namespace rf::engine
             s.takeFinished = stream.isComplete();
             s.takeDropped = stream.getNumDropped();
             s.takeGaps = stream.getCallbackGaps();
+            s.takeRestarts = stream.getRestarts();
+            s.takeConfigChanged = stream.didRestartChangeConfig();
             s.takeStream = &stream;
         }
 
@@ -178,7 +182,8 @@ namespace rf::engine
         inputIndex.store (newLayout.inputIndex);
         outputIndex.store (newLayout.outputIndex);
         streamRate.store (newLayout.sampleRate);
-        restartTiming.store (true);
+        streamBufferSize.store (newLayout.bufferSize);
+        streamStarted.store (true, std::memory_order_release);
         streamRunning.store (true, std::memory_order_release);
     }
 
@@ -203,21 +208,40 @@ namespace rf::engine
         const float* in = juce::isPositiveAndBelow (inIndex, numInputs) ? inputs[inIndex] : nullptr;
         float* out = juce::isPositiveAndBelow (outIndex, numOutputs) ? outputs[outIndex] : nullptr;
 
-        const auto* cmd = command.load (std::memory_order_acquire);
+        // First callback of a (re)started stream?
+        const auto started = streamStarted.exchange (false, std::memory_order_acq_rel);
+        const auto rateNow = streamRate.load (std::memory_order_relaxed);
+        const auto bufferNow = streamBufferSize.load (std::memory_order_relaxed);
 
-        if (cmd != active)
+        const auto* cmd = command.load (std::memory_order_seq_cst);
+        const auto generation = cmd != nullptr ? cmd->generation : 0u;
+
+        if (generation != activeGeneration)
         {
+            // A new command (or none). By generation, not by address: a command published while
+            // the stream was stopped may sit where a freed one was.
             active = cmd;
+            activeGeneration = generation;
             lastCallbackTime = -1.0;
 
             if (cmd != nullptr)
             {
                 position = cmd->startSample;
                 currentGain = targetGain.load (std::memory_order_relaxed);
+                activeRate = rateNow;
+                activeBufferSize = bufferNow;
             }
         }
+        else if (started && active != nullptr && active->stream != nullptr
+                 && position > 0 && position < active->recordLength)
+        {
+            // The stream stopped and started again under a take that is still capturing: the
+            // samples in flight are lost (a gap), and a new rate or buffer size would leave
+            // the rest misaligned or at the wrong rate. The take decides what to do with it.
+            active->stream->markRestart (! juce::exactlyEqual (rateNow, activeRate) || bufferNow != activeBufferSize);
+        }
 
-        if (restartTiming.exchange (false, std::memory_order_relaxed))
+        if (started)
             lastCallbackTime = -1.0;
 
         const auto target = targetGain.load (std::memory_order_relaxed);
@@ -319,6 +343,6 @@ namespace rf::engine
                 inputClip.store (true, std::memory_order_relaxed);
         }
 
-        callbackCount.fetch_add (1, std::memory_order_acq_rel);
+        callbackCount.fetch_add (1, std::memory_order_seq_cst);
     }
 }

@@ -72,6 +72,12 @@ namespace rf::app
                     if (r.getDoubleValue() > 0.0)
                         options.virtualRates.add (r.getDoubleValue());
             }
+            else if (optionValue (arg, "virtual-reject-rate", value))
+            {
+                for (const auto& r : juce::StringArray::fromTokens (value, ",", {}))
+                    if (r.getDoubleValue() > 0.0)
+                        options.virtualRejectRates.add (r.getDoubleValue());
+            }
             else if (optionValue (arg, "virtual-speed", value))
                 options.virtualSpeed = juce::jlimit (0.1, 100.0, value.getDoubleValue());
             else if (optionValue (arg, "batch-check", value) && value.isNotEmpty())
@@ -122,11 +128,12 @@ namespace rf::app
                                                     value.fromFirstOccurrenceOf (":", false, false).getDoubleValue());
         }
 
-        // A batch or sync check never touches the audio hardware unless explicitly allowed.
-        const auto hardwareAllowed = options.batchCheckHardware || options.syncCheckHardware;
+        // A batch or sync check never touches the audio hardware unless its own flag allows it
+        // (--sync-check-hardware does not let --batch-check onto the interface, nor the reverse).
+        const auto batchNeedsVirtual = options.batchCheckFolder.has_value() && ! options.batchCheckHardware;
+        const auto syncNeedsVirtual = options.syncCheck && ! options.syncCheckHardware;
 
-        if ((options.batchCheckFolder.has_value() || options.syncCheck) && ! hardwareAllowed
-            && ! options.virtualLoopbackDelay.has_value())
+        if ((batchNeedsVirtual || syncNeedsVirtual) && ! options.virtualLoopbackDelay.has_value())
             options.virtualLoopbackDelay = 300;
 
         if (options.virtualLoopbackDelay.has_value())

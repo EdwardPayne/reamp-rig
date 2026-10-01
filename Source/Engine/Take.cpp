@@ -103,6 +103,22 @@ namespace rf::engine
             position = snap.takePosition;
             result.droppedSamples = snap.takeDropped;
             result.callbackGaps = snap.takeGaps;
+            result.streamRestarts = snap.takeRestarts;
+
+            if (snap.takeConfigChanged)
+            {
+                // The device came back at another sample rate or buffer size: the round trip
+                // (and maybe the rate) differ from what this take compensates. Discard it.
+                engine->stopTake();
+                writer->cancel();
+                result.ok = false;
+                result.cancelled = false;
+                result.deviceChanged = true;
+                result.error = "the audio device restarted with another sample rate or buffer size during the take, "
+                               "so the recording would be misaligned; it was discarded";
+                phase = Phase::done;
+                return phase;
+            }
 
             if (snap.takeFinished)
             {
@@ -141,7 +157,13 @@ namespace rf::engine
             return;
 
         engine->stopTake();
-        writer->cancel();
+        writer->cancel();       // waits for the writer thread; a finish() in progress completes
+
+        // The writer may already have renamed the take to its final name (it finished between
+        // two update() polls, or during cancel above). A cancelled take must not leave it.
+        if (const auto r = writer->getResult(); r.has_value() && r->ok)
+            r->file.deleteFile();
+
         result.cancelled = true;
         result.ok = false;
         result.error = "cancelled";

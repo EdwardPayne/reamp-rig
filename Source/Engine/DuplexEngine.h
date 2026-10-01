@@ -32,6 +32,8 @@ namespace rf::engine
         juce::int64 takeLength = 0;             // samples to capture: source + latency + tail
         juce::int64 takeDropped = 0;            // samples the record FIFO could not take
         int takeGaps = 0;                       // callback gaps detected during the take
+        int takeRestarts = 0;                   // stream restarts while the take was capturing
+        bool takeConfigChanged = false;         // ... at least one of them with another rate or buffer size
         const RecordStream* takeStream = nullptr;   // identifies the take these fields belong to
     };
 
@@ -54,6 +56,13 @@ namespace rf::engine
         take share the one command slot, so starting one replaces the other. Commands that
         the audio thread may still be reading are retired and freed only after a later
         callback has completed (or the stream has stopped).
+
+        Stream restarts (review 2026-10-01, E1/E2): the audio thread recognises a new command
+        by its generation, never by its address (a command published while the stream was
+        stopped may be allocated where a freed one was), so a take started across a stop and
+        start always begins at sample 0. A take that is still capturing when the stream stops
+        and starts again is marked on its RecordStream (a gap; with another sample rate or
+        buffer size, a take that must be discarded).
     */
     class DuplexEngine final : public DuplexCallback
     {
@@ -130,7 +139,8 @@ namespace rf::engine
         std::atomic<float> targetGain { 1.0f };
         std::atomic<int> inputIndex { -1 }, outputIndex { -1 };
         std::atomic<double> streamRate { 0.0 };
-        std::atomic<bool> restartTiming { true };
+        std::atomic<int> streamBufferSize { 0 };
+        std::atomic<bool> streamStarted { true };      // set by streamStarting, taken by the next callback
         std::atomic<juce::uint64> callbackCount { 0 };
         std::atomic<bool> streamRunning { false };
         std::atomic<juce::int64> playhead { 0 };
@@ -141,7 +151,10 @@ namespace rf::engine
         std::function<double()> clock;
 
         // Audio thread only
-        const Command* active = nullptr;
+        const Command* active = nullptr;        // dereferenced only while its generation is current
+        juce::uint32 activeGeneration = 0;      // 0: no command
+        double activeRate = 0.0;                // stream rate and buffer size when the command started
+        int activeBufferSize = 0;
         juce::int64 position = 0;
         float currentGain = 1.0f;
         double lastCallbackTime = -1.0;

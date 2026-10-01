@@ -31,6 +31,7 @@ namespace rf::test
             double defaultRate = 48000.0;
             int defaultBufferSize = 512;
             bool failsToOpen = false;
+            juce::Array<double> rejectedRates;          // listed, but open() at them fails
         };
 
         struct Type
@@ -107,6 +108,14 @@ namespace rf::test
             }
 
             const auto* primary = out != nullptr ? out : in;
+
+            if (primary->rejectedRates.contains (nearest (primary->rates, config.sampleRate > 0.0 ? config.sampleRate
+                                                                                                 : primary->defaultRate)))
+            {
+                status = {};
+                notifyListeners();
+                return "The device refused the sample rate";
+            }
 
             status = {};
             status.config = config;

@@ -3,6 +3,7 @@
 #include "FileItem.h"
 #include "FolderScanner.h"
 
+#include <map>
 #include <set>
 #include <vector>
 
@@ -13,7 +14,8 @@ namespace rf::model
         - Groups are keyed by each file's parent folder and appear in the order they were
           first added. Files inside a group are kept in natural file-name order, so adding the
           same files in a different order gives the same list.
-        - A file (by absolute path) is only ever in the list once.
+        - A file is only ever in the list once (by fileIdentity: device and inode where
+          available, else the absolute path).
         - Holds the row selection and the "lead" item (the last clicked row, which the
           waveform panel shows), so selection rules can be unit tested.
 
@@ -26,6 +28,7 @@ namespace rf::model
         {
             juce::File folder;
             std::vector<FileItem> files;
+            juce::String key;           // fileIdentity of the folder
         };
 
         struct AddResult
@@ -89,9 +92,16 @@ namespace rf::model
         // Edits. Each returns the number of items actually changed.
 
         /** Sets the channel on the given items. Items without a channel choice (mono) are left
-            untouched; that is the multi-select L/R rule from PROMPT.md section 3.1.6. */
+            untouched; that is the multi-select L/R rule from PROMPT.md section 3.1.6. The item
+            locked with setChannelLock is left untouched too. */
         int setChannel (const std::vector<ItemId>& ids, Channel);
         int setChannelOfSelection (Channel c)          { return setChannel (getSelectedIds(), c); }
+
+        /** The batch's current file (0: none): its channel cannot change while its take is
+            prepared and recorded, so the file, its _L/_R tag and the log agree (review
+            2026-10-01, A3). */
+        void setChannelLock (ItemId id) noexcept        { channelLocked = id; }
+        ItemId getChannelLock() const noexcept          { return channelLocked; }
 
         int remove (const std::vector<ItemId>& ids);
         int removeSelected()                           { return remove (getSelectedIds()); }
@@ -122,10 +132,12 @@ namespace rf::model
         void changed();
 
         std::vector<Group> groups;
-        std::set<juce::String> paths;   // dedupe keys of every file in the list
+        std::set<juce::String> paths;   // dedupe keys (fileIdentity) of every file in the list
+        std::map<ItemId, juce::String> keys;    // each item's dedupe key, as it was when added
         std::set<ItemId> selection;
         ItemId lead = 0;
         ItemId nextId = 1;
+        ItemId channelLocked = 0;
 
         juce::ListenerList<Listener> listeners;
 

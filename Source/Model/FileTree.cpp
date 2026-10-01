@@ -6,12 +6,6 @@ namespace rf::model
 {
     namespace
     {
-        juce::String pathKey (const juce::File& f)
-        {
-            const auto path = f.getFullPathName();
-            return juce::File::areFileNamesCaseSensitive() ? path : path.toLowerCase();
-        }
-
         bool naturalLess (const FileItem& a, const FileItem& b)
         {
             return a.file.getFileName().compareNatural (b.file.getFileName()) < 0;
@@ -25,26 +19,29 @@ namespace rf::model
 
         for (const auto& s : scanned)
         {
-            if (! paths.insert (pathKey (s.file)).second)
+            const auto key = fileIdentity (s.file);
+
+            if (! paths.insert (key).second)
             {
                 ++result.duplicates;
                 continue;
             }
 
             const auto folder = s.file.getParentDirectory();
-            const auto folderKey = pathKey (folder);
+            const auto folderKey = fileIdentity (folder);
 
             auto group = std::find_if (groups.begin(), groups.end(),
-                                       [&] (const Group& g) { return pathKey (g.folder) == folderKey; });
+                                       [&] (const Group& g) { return g.key == folderKey; });
 
             if (group == groups.end())
             {
-                groups.push_back ({ folder, {} });
+                groups.push_back ({ folder, {}, folderKey });
                 group = std::prev (groups.end());
             }
 
             FileItem item;
             item.id = nextId++;
+            keys[item.id] = key;
             item.file = s.file;
             item.info = s.info;
             item.root = s.root;
@@ -66,6 +63,7 @@ namespace rf::model
     {
         groups.clear();
         paths.clear();
+        keys.clear();
         selection.clear();
         lead = 0;
         changed();
@@ -94,7 +92,7 @@ namespace rf::model
 
     bool FileTree::contains (const juce::File& f) const
     {
-        return paths.count (pathKey (f)) > 0;
+        return paths.count (fileIdentity (f)) > 0;
     }
 
     const FileItem* FileTree::find (ItemId id) const
@@ -104,11 +102,11 @@ namespace rf::model
 
     const FileItem* FileTree::findByFile (const juce::File& f) const
     {
-        const auto key = pathKey (f);
+        const auto key = fileIdentity (f);
 
         for (const auto& g : groups)
             for (const auto& item : g.files)
-                if (pathKey (item.file) == key)
+                if (const auto k = keys.find (item.id); k != keys.end() && k->second == key)
                     return &item;
 
         return nullptr;
@@ -208,6 +206,9 @@ namespace rf::model
 
         for (auto id : ids)
         {
+            if (id == channelLocked && id != 0)
+                continue;
+
             if (auto* item = findMutable (id); item != nullptr && item->hasChannelChoice() && item->channel != channel)
             {
                 item->channel = channel;
@@ -233,7 +234,12 @@ namespace rf::model
                 if (doomed.count (item.id) == 0)
                     return false;
 
-                paths.erase (pathKey (item.file));
+                if (const auto k = keys.find (item.id); k != keys.end())
+                {
+                    paths.erase (k->second);
+                    keys.erase (k);
+                }
+
                 selection.erase (item.id);
                 ++n;
                 return true;

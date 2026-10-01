@@ -1,6 +1,7 @@
 # Reamp Rig architecture
 
-Current through phase 6 (polish, version 0.1.0). Everything described here is implemented.
+Current through phase 6 (polish, version 0.1.0) and the review fixes of 2026-10-01
+(`docs/REVIEW-2026-10-01.md`). Everything described here is implemented.
 
 ## Modules
 
@@ -70,7 +71,21 @@ a thread-safe state snapshot and receives change notifications on the message th
   source and the stream to `DuplexEngine::startTake` as one immutable command through the same
   atomic pointer as audition (`Command`, `retire()`, `callbackCount`). Audition and take share the
   slot, so starting a take ends an audition. `update()` stops the engine's take once every sample
-  is captured and collects the writer's result; `cancel()` stops both and deletes the temp file.
+  is captured and collects the writer's result; `cancel()` stops both and deletes the temp file,
+  and the final file too when the writer had already renamed it (a cancelled take never leaves a
+  file; review E3).
+- **Stream restarts (review E1/E2).** The audio thread recognises a new command by its
+  generation, never by its address: a command published while the stream was stopped (Pause,
+  device loss, reconnect, Resume) may be allocated where a freed one was, and must still start
+  at sample 0. `streamStarting` records the rate and buffer size and flags the next callback;
+  if a take is still capturing then (the same command across a stop and start), that callback
+  marks its `RecordStream` (`markRestart`, with "config changed" when the rate or buffer size
+  differs from when the take began). The take counts a restart as a dropout (XR, "stream
+  restarts" in the log); a changed configuration makes `Take::update` discard the take at once
+  (`TakeResult::deviceChanged`, an error, no file), and the batch pauses as on device loss. A sync
+  repeat that spans a restart is a dropout. The marking is two relaxed atomics, real-time safe.
+  `stopCommand`'s null store, `retire`'s `callbackCount` load and the audio thread's command load
+  and count increment are `seq_cst` (review E4).
 - **Latency math (PROMPT.md 4.3).** Output starts at sample 0 of the source in the same callback
   in which capture starts, so input sample *k* of the take holds what the round trip returned
   from output sample *k - latency*. The engine captures `recordLength = sourceLength + latency +
@@ -86,7 +101,7 @@ a thread-safe state snapshot and receives change notifications on the message th
   left-justified), the exact inverse of how JUCE reads PCM, and writes 32-bit as IEEE float.
 - **Dropouts.** The audio thread counts samples the FIFO could not take (overflow) and callback
   gaps (a callback more than 1.75 buffers, and at least 3 ms more than one buffer, after the
-  previous one, timed with the high-resolution clock). The device's own xrun count
+  previous one, timed with the high-resolution clock) and stream restarts under the take. The device's own xrun count
   (`DeviceStatus::xrunCount`: `AudioDeviceManager::getXRunCount()`, i.e. the driver count where
   one exists plus JUCE's callback-overrun count; CoreAudio has no native count) is compared before
   and after each take. Any of these marks the file with a dropout warning (XR); samples lost to an
@@ -106,6 +121,15 @@ a thread-safe state snapshot and receives change notifications on the message th
   BatchController reopens the device at the file's rate through `AudioController::switchSampleRate`
   (not saved) if the device lists that rate; the original rate is restored when the batch ends.
   The driver latency estimate is read again after every switch.
+- **No-fallback switches (review A1).** `switchSampleRate` opens in `DeviceSession::Mode::exact`:
+  the same driver type and devices at exactly that rate and buffer size, or an error naming the
+  device and the rate (never the system defaults, never the nearest rate). On an error the
+  device is reopened at its previous rate (exactly too) and the batch pauses with the message
+  ("Paused: the device could not switch to 44.1 kHz for Riff 02.wav. … Nothing was recorded on
+  another device …"); `--sync-check` fails that rate. `restoreConfig` at the end puts back only
+  the rate and buffer size on the device that runs then; if another device runs (the preferred
+  one came back while the batch was paused) its own configuration is kept (review A4).
+  `--virtual-reject-rate` makes the virtual device refuse a listed rate to check this.
 - **Fallback.** If the device cannot run at the file's rate, the loader resamples the source to
   the device rate for playback, the engine records at the device rate, and the writer resamples
   the recording back to the file rate, so the file still has the source's rate and length
@@ -231,8 +255,18 @@ a thread-safe state snapshot and receives change notifications on the message th
   time, so loading, switching and writing count), real time before the first file finishes.
 - Pause discards the current take; that file is Queued again and is redone from its start on
   Resume (a re-amp cannot be resumed mid-file without a discontinuity). Skip marks it Skipped.
-  Stop discards it and leaves it Queued. A device that stops pauses the batch. A file removed
-  from the list during the batch is skipped.
+  Stop discards it and leaves it Queued. A device that stops pauses the batch, and so does one
+  that is restarted from outside at another rate or buffer size (`AudioController` compares the
+  running rate and buffer with what its own last open left; `onDeviceReconfigured`). Files
+  removed from the list during the batch are dropped from the run (`BatchQueue::dropMissing`:
+  out of "File N of M", the ETA and the pauses) and counted and logged as skipped once; the
+  current one ends its take or wait first (review A2, A6, A8).
+- **Channel and names per file (review A3, U2).** When a file begins, its L/R channel is read
+  once and used for the load, the take, the `_L`/`_R` tag, the row and the log; the list keeps
+  it locked meanwhile (`FileTree::setChannelLock`). The batch keeps the set of files it has
+  written (`OutputNaming::WrittenSet`); `resolve` treats a name in it as taken under every
+  collision policy and auto-numbers the second source (log line "Name: … numbered …"), so one
+  batch never overwrites its own outputs.
 - **Pause between files (phase 6).** `pauseBetweenFilesSeconds` (OPTIONS, 0..60 s, default 2) is
   read at Start. When a take finishes (`takeDone`), `settleUntilMs = now + pause`. `next()`
   advances the queue; if the deadline is still ahead the BatchController enters `Phase::waiting`
@@ -304,6 +338,8 @@ a thread-safe state snapshot and receives change notifications on the message th
   then matches channels by name, then index, else the first channel, reopening only if the
   channels changed. Every fallback returns a plain-language warning; if the device will not
   open, the system defaults are tried once; nothing throws or crashes when nothing opens.
+  `Mode::exact` (batch and sync rate switches) does none of these fallbacks: a device that is not
+  listed is left untouched, a refused open or a rounded rate/buffer is an error.
 - **`AudioController`** (App): opens the saved config at startup (dev flags may override it for
   one run) and **never persists at startup**, so a missing Apollo falls back for this session
   only and is used again once it is back. Every user change in the AUDIO section is applied and
@@ -350,7 +386,7 @@ a thread-safe state snapshot and receives change notifications on the message th
   the device rate changes; its peak drives "Peak at output" (file peak + output level, `warn`
   with "clips" above 0 dBFS).
 - `startAudition` publishes an immutable `Command {source, startSample, generation}` through an
-  atomic pointer. The audio thread notices a new pointer, jumps to its start and plays; at the
+  atomic pointer. The audio thread notices a new generation, jumps to its start and plays; at the
   end it publishes the command's generation as finished. Stopping swaps in null and *retires*
   the command: it is freed only after the callback counter has moved past the value read at
   retirement (or the stream has stopped), so the audio thread never sees freed memory and never
@@ -407,7 +443,8 @@ is message-thread only.
   2+ channels), `FileStatus` (Queued / Recording / Done / Skipped / Error) and `progress` (0..1).
 - `FileTree`: the list. Groups keyed by parent folder, in order of first appearance; files
   inside a group in natural file-name order, so the list does not depend on the order files
-  arrive. Dedupe by absolute path (case-insensitive where the file system is). Holds the
+  arrive. Dedupe by `fileIdentity` (device + inode via `stat` on macOS/Linux, else the path,
+  case-insensitive where the platform's names are), stored per item for removal (review U8). Holds the
   selection and the *lead* item (last clicked; shown in the waveform panel), so selection rules
   are testable without a GUI. Rule from PROMPT.md 3.1.6: `setChannel(ids, ch)` changes only items
   with a channel choice; mono items are skipped. Synchronous `Listener::fileTreeChanged()`.
@@ -427,12 +464,18 @@ is message-thread only.
   folder (subfolder next to the source, or the single output folder, flat or mirrored below the
   parent of the added folder, so adding "Session A" gives `<out>/Session A/Takes/...`), collision
   policies (overwrite, skip, auto-number `name (2).wav`), validation messages and the example
-  line.
-- `FolderScanner`: `scan(inputs, recursive, formats, shouldAbort, outputSubfolderName)` is
-  synchronous and used by the tests. While recursing, a subfolder named like the DESTINATION
-  subfolder (default "Reamped", case-insensitive where the file system is) is not entered and is
-  returned in `skippedOutputFolders` (status bar: "Skipped Reamped (output folder)"); a folder
-  added directly is always scanned. `scanAsync(...)` runs it on the scanner's own single-thread `juce::ThreadPool`
+  line. Review fixes: `legalName` removes only `/ \ : * ? " < > |` and control characters
+  (Windows: trailing dots and spaces too), so `# @ , ;` stay; names are at most 240 UTF-8 bytes
+  (255 minus the 15 the hidden temp name adds), shortening only the source name; a volume root
+  added as a whole mirrors the folders below it; `resolve` takes the batch's `WrittenSet` (a name
+  the batch already wrote is auto-numbered under every policy).
+- `FolderScanner`: `scan(inputs, recursive, formats, shouldAbort, outputSubfolderName,
+  outputFolder)` is synchronous and used by the tests. While recursing, a subfolder named like
+  the DESTINATION subfolder as used on disk (`OutputNaming::subfolderName`, default "Reamped",
+  case-insensitive where the file system is) in subfolder mode, or the single output folder
+  itself (by identity) in single-folder mode, is not entered and is returned in
+  `skippedOutputFolders` (status bar: "Skipped Reamped (output folder)"); the app passes only the
+  rule of the active mode (review U9). A folder added directly is always scanned. `scanAsync(...)` runs it on the scanner's own single-thread `juce::ThreadPool`
   ("Folder scanner") and posts the `ScanResult` to the message thread with
   `MessageManager::callAsync`; a shared `alive` flag drops results that arrive after the scanner
   is destroyed, and scans are delivered in the order queued. Supported formats are whatever
@@ -477,7 +520,9 @@ is message-thread only.
 reads only the file header on the message thread; the level data is generated on the cache's
 `TimeSliceThread` and the thumbnail's change messages trigger repaints as data arrives
 ("Building waveform N%" until complete). Finished thumbnails stay in the cache, so reselecting a
-recent file is instant. Stereo files get one lane per channel with the non-selected channel
+recent file is instant. Both thumbnails hash their source with the file's modification time
+(`FileInputSource (file, true)`), so an edited source or an overwritten take is never drawn from a
+stale cache entry (review U4). Stereo files get one lane per channel with the non-selected channel
 dimmed; files with more than two channels show their first two. The visible time range drives
 both the ruler (tick step chosen from a 1-2-5 series so major ticks are at least 80 px apart) and
 the thumbnail drawing; cmd+scroll or pinch zooms around the mouse (minimum 50 ms visible), plain
@@ -523,9 +568,11 @@ JUCE `UnitTest`, not Catch2: it is already part of `juce_core`, needs no extra d
 dependency, and the code under test uses JUCE types throughout. `Tests/TestMain.cpp` is a JUCE
 console app (`ReampRigTests`) that runs every test or one category
 (`--category=<name>`) and exits non-zero on any failure. CMake registers one ctest entry per
-category (`FolderScanner`, `FileTree`, `FileTreeView`, `Settings`, `DeviceSession`,
-`DuplexEngine`, `SourceLoader`, `Resampler`, `Loopback`, `Take`, `OutputNaming`, `BatchQueue`,
-`Sync`, `Keyboard`). `Keyboard` drives the confirmation dialog and the file list headlessly
+category, derived from the file names in `REAMPRIG_TEST_SOURCES` (`Tests/<Category>Tests.cpp`):
+`FolderScanner`, `FileTree`, `FileTreeView`, `Settings`, `DeviceSession`, `DuplexEngine`,
+`SourceLoader`, `Resampler`, `Loopback`, `Take`, `OutputNaming`, `BatchQueue`, `Sync`,
+`Keyboard`, `CommandLine`. The test target defines `JUCE_MODAL_LOOPS_PERMITTED=1` so tests can
+pump the message loop for `callAsync` results. `Keyboard` drives the confirmation dialog and the file list headlessly
 (keys in every state, collapsed groups via a synthetic mouse event). `Tests/LoopbackRig.h` holds the loopback device setup, test files and the take `Rig`
 shared by `Loopback` and `Sync`.
 `Loopback` is the end-to-end engine test (files on disk -> SourceLoader -> DuplexEngine ->

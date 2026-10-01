@@ -88,6 +88,17 @@ namespace rf::engine
             || (config.outputDevice != options.deviceName && config.inputDevice != options.deviceName))
             return "No such device";
 
+        const auto rate = nearest (options.sampleRates, config.sampleRate > 0.0 ? config.sampleRate : options.defaultSampleRate);
+
+        if (options.rejectedRates.contains (rate))
+        {
+            // Like a driver that lists a rate but cannot run at it: the device ends up closed.
+            status = {};
+            status.lastError = "the device refused " + juce::String (rate, 0) + " Hz";
+            notifyListeners();
+            return status.lastError;
+        }
+
         status = {};
         status.config = config;
         status.config.inputDevice = status.config.outputDevice = options.deviceName;

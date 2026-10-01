@@ -39,6 +39,12 @@ namespace rf::engine
         app passes false until microphone access is granted: on macOS even creating a device
         with an input blocks until the permission prompt is answered). Without it the wanted
         input channel is returned unchanged, since its names cannot be read.
+
+        Mode::exact (review 2026-10-01, A1) is for the sample-rate switches of a batch or a
+        sync run: the named driver type and devices, the sample rate and the buffer size must
+        be exactly the wanted ones. Nothing falls back (no other device, no system defaults, no
+        nearest rate); anything else is an error naming the device and the rate. A device that
+        is not listed is not touched; one that refuses the rate may be left closed by its driver.
     */
     class DeviceSession
     {
@@ -52,12 +58,14 @@ namespace rf::engine
             juce::String error;
         };
 
+        enum class Mode { withFallback, exact };
+
         explicit DeviceSession (AudioDeviceInterface& d) : device (d) {}
 
         /** Resolves the type and device names only (no open). */
         DeviceConfig resolveDevices (const DeviceConfig& wanted, juce::StringArray& warnings);
 
-        Result open (const DeviceConfig& wanted, bool openInput);
+        Result open (const DeviceConfig& wanted, bool openInput, Mode mode = Mode::withFallback);
 
         /** True when the driver type and every device named in `wanted` (output, input; empty
             names are ignored) are listed right now. False when `wanted` names no device. */

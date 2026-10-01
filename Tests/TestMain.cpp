@@ -4,7 +4,9 @@
 /*  Test runner for all JUCE UnitTest cases in this executable.
 
     Usage: ReampRigTests [--category=<name>]
-    Exit code is the number of failed test cases (0 = all passed), which is what ctest uses.
+    Exit code 0 when every check passed, 1 when any check failed or no test ran (what ctest
+    uses). A category is the second argument of each juce::UnitTest's constructor; CMake
+    registers one ctest entry per Tests/<Category>Tests.cpp.
 */
 int main (int argc, char* argv[])
 {

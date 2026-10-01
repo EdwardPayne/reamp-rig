@@ -77,4 +77,11 @@ namespace rf::model
         /** True for any source with more than one channel (only the first two are selectable). */
         bool hasChannelChoice() const noexcept   { return info.numChannels >= 2; }
     };
+
+    /** What makes two paths the same file, for deduplication (review 2026-10-01, U8): the
+        device and inode where the platform has them (macOS, Linux), so "Kick.wav" and
+        "kick.wav" are one file on a case-insensitive volume and two on a case-sensitive one;
+        otherwise (Windows, or a path that does not exist) the path, compared
+        case-insensitively where the platform's file names are. */
+    juce::String fileIdentity (const juce::File&);
 }

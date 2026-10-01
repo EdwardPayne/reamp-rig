@@ -2,6 +2,8 @@
 
 #include "FileTree.h"
 
+#include <functional>
+
 namespace rf::model
 {
     /*  The order and state of one batch run (PROMPT.md section 3.3).
@@ -66,9 +68,25 @@ namespace rf::model
         void resume();
         void stop();
 
-        /** A file was removed from the list: its entry is dropped from the run (unless it is
-            the current one, which the caller finishes as skipped). */
-        void remove (ItemId);
+        /** A file was removed from the list: its entry is dropped from the run, so it is no
+            longer counted in getTotal(), the remaining seconds or the pauses still to come.
+            Returns true when an unfinished entry other than the current one was dropped (the
+            caller counts and logs it as skipped); the current entry is never dropped here (the
+            caller finishes it as skipped), and finished entries stay as they are. */
+        bool remove (ItemId);
+
+        /** Files of the run that are no longer in the list (removed during the batch). Every
+            unfinished entry whose file `isListed` says is gone is dropped (remove), except the
+            current one, which is only reported: the caller cancels its take and finishes it as
+            skipped. Finished entries (including a current one already finished) are never
+            reported again, so a later call does not count them twice (review 2026-10-01, A2/A6). */
+        struct Dropped
+        {
+            std::vector<int> positions;     // 0-based positions in the run before the call (log lines)
+            bool current = false;           // the current entry's file is gone
+        };
+
+        Dropped dropMissing (const std::function<bool (ItemId)>& isListed);
 
         int countWithOutcome (FileStatus) const noexcept;
 

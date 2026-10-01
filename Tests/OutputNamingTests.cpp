@@ -186,6 +186,196 @@ namespace rf::test
                 o.collision = CollisionPolicy::overwrite;
                 expect (OutputNaming::resolve (take, sessionA, std::nullopt, o).overwrites);
             }
+
+            testReviewFixes (dir);
+        }
+
+    private:
+        // Review 2026-10-01: U2 (one batch never overwrites its own outputs), U3 (long names),
+        // U5 (only really illegal characters are removed), U6 (a volume root added as a whole).
+        void testReviewFixes (const TempDirectory& dir)
+        {
+            beginTest ("legal names: only / \\ : * ? \" < > | and control characters are removed");
+            {
+                expectEquals (OutputNaming::legalName (juce::String ("Riff #2, take@home; v1/2:3*?\"<>|\\") + juce::String::charToString (9)
+                                                       + juce::String::charToString (1)),
+                              juce::String ("Riff #2, take@home; v123"));
+                expectEquals (OutputNaming::legalName (juce::CharPointer_UTF8 ("Gitarre \xc3\xa9 & (Bass) [1] {x} ~ \xe6\xbc\xa2")),
+                              juce::String (juce::CharPointer_UTF8 ("Gitarre \xc3\xa9 & (Bass) [1] {x} ~ \xe6\xbc\xa2")));
+
+               #if JUCE_WINDOWS
+                expectEquals (OutputNaming::legalName ("Take. . "), juce::String ("Take"), "Windows trims trailing dots and spaces");
+               #else
+                expectEquals (OutputNaming::legalName ("Take. "), juce::String ("Take. "), "kept where the file system keeps them");
+               #endif
+
+                NamingOptions o;
+                const auto hash = dir.get().getChildFile ("DI/Session A/Riff #2, take@home.wav");
+                expectEquals (OutputNaming::fileName (hash, o, std::nullopt), juce::String ("Riff #2, take@home_reamp.wav"),
+                              "# @ , ; are legal: the name is not changed silently");
+
+                o.prefix = "#1 ";
+                o.suffix = "; amp@3";
+                expectEquals (OutputNaming::fileName (hash, o, std::nullopt), juce::String ("#1 Riff #2, take@home; amp@3.wav"));
+            }
+
+            beginTest ("subfolder names: # is a real folder, the scanner gets the name used on disk");
+            {
+                const auto riff = dir.get().getChildFile ("DI/Session A/Riff 01.wav");
+                NamingOptions o;
+
+                o.subfolderName = "#";
+                expect (OutputNaming::validate (o).isEmpty());
+                expectEquals (OutputNaming::subfolderName (o), juce::String ("#"));
+                expectSameFile (OutputNaming::folder (riff, {}, o), riff.getParentDirectory().getChildFile ("#"));
+                expect (OutputNaming::folder (riff, {}, o) != riff.getParentDirectory(), "never the source folder itself");
+
+                o.subfolderName = "Reamped #2";
+                expectEquals (OutputNaming::subfolderName (o), juce::String ("Reamped #2"));
+                expectSameFile (OutputNaming::folder (riff, {}, o), riff.getParentDirectory().getChildFile ("Reamped #2"));
+                expectEquals (OutputNaming::example (riff, {}, std::nullopt, o), juce::String ("Reamped #2/Riff 01_reamp.wav"));
+
+                o.subfolderName = " Amped*? ";
+                expectEquals (OutputNaming::subfolderName (o), juce::String ("Amped"));
+
+                o.subfolderName = "???";
+                expect (OutputNaming::validate (o).isNotEmpty(), "nothing usable left");
+                o.subfolderName = "*";
+                expect (OutputNaming::validate (o).isNotEmpty());
+            }
+
+            beginTest ("long names: only the source name is shortened, the result fits the limit");
+            {
+                NamingOptions o;
+                o.channelTag = true;
+                const auto folder = dir.folder ("Long");
+                const auto longSource = folder.getChildFile (juce::String::repeatedString ("a", 300) + ".wav");
+
+                const auto first = OutputNaming::fileName (longSource, o, Channel::right);
+                const auto second = OutputNaming::fileName (longSource, o, Channel::right, 2);
+                const auto third = OutputNaming::fileName (longSource, o, Channel::right, 3);
+
+                expectLessOrEqual ((int) first.getNumBytesAsUTF8(), OutputNaming::maxNameBytes);
+                expectEquals ((int) second.getNumBytesAsUTF8(), OutputNaming::maxNameBytes);
+                expect (first.endsWith ("_reamp_R.wav"), first);
+                expect (second.endsWith ("_reamp_R (2).wav"), second);
+                expect (third.endsWith ("_reamp_R (3).wav"), third);
+                expect (second != third, "auto-numbering still produces different names");
+
+                // Multi-byte characters are never cut in half.
+                const auto accented = folder.getChildFile (juce::String::repeatedString (juce::CharPointer_UTF8 ("\xc3\xa9"), 200) + ".wav");
+                const auto name = OutputNaming::fileName (accented, o, Channel::left, 12);
+                expectLessOrEqual ((int) name.getNumBytesAsUTF8(), OutputNaming::maxNameBytes);
+                expect (name.endsWith ("_reamp_L (12).wav"), name);
+                expect (juce::CharPointer_UTF8::isValidString (name.toRawUTF8(), (int) name.getNumBytesAsUTF8()));
+
+                // On disk: the name and its temp file can be created, and auto-number finds a free one.
+                // Created like FileWriter does (an output stream on the name itself; juce's
+                // replaceWithText would add a longer temporary name of its own).
+                const auto create = [] (const juce::File& f)
+                {
+                    f.getParentDirectory().createDirectory();
+                    juce::FileOutputStream stream (f);
+                    return stream.openedOk() && stream.writeText ("x", false, false, nullptr);
+                };
+
+                auto t = OutputNaming::resolve (longSource, longSource, Channel::right, o);
+                expect (create (t.file), t.file.getFileName());
+                expect (create (t.file.getSiblingFile ("." + t.file.getFileNameWithoutExtension() + ".reamprig-part.wav")),
+                        "the writer's hidden temp name fits too");
+                t = OutputNaming::resolve (longSource, longSource, Channel::right, o);
+                expect (! t.skip, t.reason);
+                expect (t.file.getFileName().endsWith ("_reamp_R (2).wav"), t.file.getFileName());
+            }
+
+            beginTest ("one batch never overwrites its own output: same name from two folders, overwrite on");
+            {
+                const auto out = dir.get().getChildFile ("Batch Out");
+                const auto a = dir.get().getChildFile ("Sessions/Session A/Riff 01.wav");
+                const auto b = dir.get().getChildFile ("Sessions/Session B/Riff 01.wav");
+
+                NamingOptions o;
+                o.mode = DestinationMode::singleFolder;
+                o.outputFolder = out;
+                o.mirrorStructure = false;
+                o.collision = CollisionPolicy::overwrite;
+
+                OutputNaming::WrittenSet written;
+                const auto first = OutputNaming::resolve (a, a.getParentDirectory(), std::nullopt, o, written);
+                expectSameFile (first.file, out.getChildFile ("Riff 01_reamp.wav"));
+                expect (first.note.isEmpty());
+                expect (writeJunk (first.file));
+                written.insert (first.file);
+
+                const auto second = OutputNaming::resolve (b, b.getParentDirectory(), std::nullopt, o, written);
+                expectSameFile (second.file, out.getChildFile ("Riff 01_reamp (2).wav"));
+                expect (! second.overwrites && ! second.skip);
+                expect (second.note.contains ("already written by this batch"), second.note);
+
+                // A file from an earlier batch with the numbered name is overwritten (the policy),
+                // the batch's own output never.
+                expect (writeJunk (second.file));
+                const auto again = OutputNaming::resolve (b, b.getParentDirectory(), std::nullopt, o, written);
+                expectSameFile (again.file, out.getChildFile ("Riff 01_reamp (2).wav"));
+                expect (again.overwrites);
+
+                // A new batch (empty set): overwrite as before.
+                const auto rerun = OutputNaming::resolve (a, a.getParentDirectory(), std::nullopt, o);
+                expectSameFile (rerun.file, out.getChildFile ("Riff 01_reamp.wav"));
+                expect (rerun.overwrites);
+            }
+
+            beginTest ("one batch never overwrites its own output: x.wav and x.aif, every policy");
+            {
+                const auto folder = dir.folder ("Formats");
+                const auto wav = folder.getChildFile ("x.wav");
+                const auto aif = folder.getChildFile ("x.aif");
+
+                for (const auto policy : { CollisionPolicy::autoNumber, CollisionPolicy::overwrite, CollisionPolicy::skip })
+                {
+                    NamingOptions o;
+                    o.collision = policy;
+                    const auto subfolder = folder.getChildFile ("Reamped");
+                    subfolder.deleteRecursively();
+
+                    OutputNaming::WrittenSet written;
+                    const auto first = OutputNaming::resolve (wav, folder, std::nullopt, o, written);
+                    expect (writeJunk (first.file));
+                    written.insert (first.file);
+
+                    const auto second = OutputNaming::resolve (aif, folder, std::nullopt, o, written);
+                    expect (! second.skip, "skip does not drop the second source of the same name");
+                    expect (! second.overwrites);
+                    expectSameFile (second.file, subfolder.getChildFile ("x_reamp (2).wav"));
+                }
+
+                // The set is compared like file names are (case-insensitive where they are).
+                NamingOptions o;
+                OutputNaming::WrittenSet written { folder.getChildFile ("Reamped/X_REAMP.wav") };
+                const auto t = OutputNaming::resolve (wav, folder, std::nullopt, o, written);
+
+                if (! juce::File::areFileNamesCaseSensitive())
+                    expectEquals (t.file.getFileName(), juce::String ("x_reamp (2).wav"));
+            }
+
+            beginTest ("mirroring a volume root keeps the folders below it");
+            {
+               #if JUCE_WINDOWS
+                const juce::File root ("C:\\");
+                const juce::File a ("C:\\A\\x.wav"), b ("C:\\B\\x.wav"), top ("C:\\x.wav");
+               #else
+                const juce::File root ("/");
+                const juce::File a ("/A/x.wav"), b ("/B/x.wav"), top ("/x.wav");
+               #endif
+
+                NamingOptions o;
+                o.mode = DestinationMode::singleFolder;
+                o.outputFolder = dir.get().getChildFile ("Out");
+
+                expectSameFile (OutputNaming::folder (a, root, o), o.outputFolder.getChildFile ("A"));
+                expectSameFile (OutputNaming::folder (b, root, o), o.outputFolder.getChildFile ("B"));
+                expectSameFile (OutputNaming::folder (top, root, o), o.outputFolder);
+            }
         }
     };
 

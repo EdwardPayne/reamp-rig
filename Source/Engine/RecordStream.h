@@ -15,8 +15,8 @@ namespace rf::engine
 
         If the writer falls behind and the FIFO is full, the samples that do not fit are
         dropped and counted (getNumDropped); the take is then marked with a dropout warning.
-        The same object carries the take's progress and the callback gaps the engine detected,
-        so every per-take counter starts at zero with a fresh take.
+        The same object carries the take's progress, the callback gaps and the stream restarts
+        the engine detected, so every per-take counter starts at zero with a fresh take.
     */
     class RecordStream
     {
@@ -71,6 +71,18 @@ namespace rf::engine
         void markComplete() noexcept                    { complete.store (true, std::memory_order_release); }
 
         void addCallbackGap() noexcept                  { gaps.fetch_add (1, std::memory_order_relaxed); }
+
+        /** The stream stopped and started again while this take was capturing (review
+            2026-10-01, E2): the samples in flight were lost, so the take has a gap. With
+            `configChanged` the device came back at another sample rate or buffer size, so the
+            rest of the recording is misaligned or at the wrong rate and the take must not be kept. */
+        void markRestart (bool configChanged) noexcept
+        {
+            restarts.fetch_add (1, std::memory_order_relaxed);
+
+            if (configChanged)
+                restartChangedConfig.store (true, std::memory_order_relaxed);
+        }
         void setPosition (juce::int64 p) noexcept       { position.store (p, std::memory_order_relaxed); }
 
         //==============================================================================
@@ -96,6 +108,8 @@ namespace rf::engine
         juce::int64 getNumHandled() const noexcept      { return handled.load (std::memory_order_acquire); }
         juce::int64 getNumDropped() const noexcept      { return dropped.load (std::memory_order_relaxed); }
         int getCallbackGaps() const noexcept            { return gaps.load (std::memory_order_relaxed); }
+        int getRestarts() const noexcept                { return restarts.load (std::memory_order_relaxed); }
+        bool didRestartChangeConfig() const noexcept    { return restartChangedConfig.load (std::memory_order_relaxed); }
         juce::int64 getPosition() const noexcept        { return position.load (std::memory_order_relaxed); }
         int getCapacity() const noexcept                { return fifo.getTotalSize() - 1; }
 
@@ -112,8 +126,8 @@ namespace rf::engine
         juce::HeapBlock<float> buffer;
 
         std::atomic<juce::int64> handled { 0 }, dropped { 0 }, position { 0 };
-        std::atomic<int> gaps { 0 };
-        std::atomic<bool> complete { false };
+        std::atomic<int> gaps { 0 }, restarts { 0 };
+        std::atomic<bool> complete { false }, restartChangedConfig { false };
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RecordStream)
     };

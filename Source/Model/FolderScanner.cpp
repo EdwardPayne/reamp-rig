@@ -6,12 +6,6 @@ namespace rf::model
 {
     namespace
     {
-        juce::String pathKey (const juce::File& f)
-        {
-            const auto path = f.getFullPathName();
-            return juce::File::areFileNamesCaseSensitive() ? path : path.toLowerCase();
-        }
-
         bool naturalLess (const juce::File& a, const juce::File& b)
         {
             return a.getFileName().compareNatural (b.getFileName()) < 0;
@@ -34,6 +28,7 @@ namespace rf::model
             juce::AudioFormatManager& formats;
             const std::function<bool()>& shouldAbort;
             juce::String outputSubfolderName;
+            juce::String outputFolderKey;       // fileIdentity of the single output folder, or empty
 
             ScanResult result;
             std::set<juce::String> seen;
@@ -49,7 +44,7 @@ namespace rf::model
 
             void addFile (const juce::File& file, bool explicitlyGiven)
             {
-                if (! seen.insert (pathKey (file)).second)
+                if (! seen.insert (fileIdentity (file)).second)
                     return;
 
                 if (! explicitlyGiven && ! hasAudioExtension (file, formats))
@@ -107,8 +102,10 @@ namespace rf::model
                         if (aborted())
                             return;
 
-                        // Results written "next to the source" must never come back as sources.
-                        if (outputSubfolderName.isNotEmpty() && sameName (sub.getFileName(), outputSubfolderName))
+                        // Results (next to the source, or in the single output folder) must
+                        // never come back as sources.
+                        if ((outputSubfolderName.isNotEmpty() && sameName (sub.getFileName(), outputSubfolderName))
+                            || (outputFolderKey.isNotEmpty() && fileIdentity (sub) == outputFolderKey))
                             result.skippedOutputFolders.push_back (sub);
                         else
                             addFolder (sub);
@@ -172,9 +169,11 @@ namespace rf::model
     ScanResult FolderScanner::scan (const juce::Array<juce::File>& inputs, bool recursive,
                                     juce::AudioFormatManager& formats,
                                     const std::function<bool()>& shouldAbort,
-                                    const juce::String& outputSubfolderName)
+                                    const juce::String& outputSubfolderName,
+                                    const juce::File& outputFolder)
     {
-        Scan scan { recursive, formats, shouldAbort, outputSubfolderName.trim(), {}, {}, {} };
+        Scan scan { recursive, formats, shouldAbort, outputSubfolderName.trim(),
+                    outputFolder.isDirectory() ? fileIdentity (outputFolder) : juce::String(), {}, {}, {} };
 
         for (const auto& input : inputs)
         {
@@ -197,17 +196,17 @@ namespace rf::model
     //==============================================================================
     struct FolderScanner::Job final : public juce::ThreadPoolJob
     {
-        Job (FolderScanner& s, juce::Array<juce::File> in, bool rec, Callback cb, juce::String skipName)
+        Job (FolderScanner& s, juce::Array<juce::File> in, bool rec, Callback cb, juce::String skipName, juce::File skipFolder)
             : ThreadPoolJob ("Folder scan"),
               scanner (s), inputs (std::move (in)), recursive (rec), onDone (std::move (cb)),
-              outputSubfolderName (std::move (skipName)), alive (s.alive)
+              outputSubfolderName (std::move (skipName)), outputFolder (std::move (skipFolder)), alive (s.alive)
         {
         }
 
         JobStatus runJob() override
         {
             auto result = FolderScanner::scan (inputs, recursive, scanner.formats, [this] { return shouldExit(); },
-                                               outputSubfolderName);
+                                               outputSubfolderName, outputFolder);
 
             juce::MessageManager::callAsync ([flag = alive, &owner = scanner,
                                               callback = std::move (onDone),
@@ -230,6 +229,7 @@ namespace rf::model
         bool recursive;
         Callback onDone;
         juce::String outputSubfolderName;
+        juce::File outputFolder;
         std::shared_ptr<std::atomic<bool>> alive;
     };
 
@@ -245,10 +245,11 @@ namespace rf::model
     }
 
     void FolderScanner::scanAsync (juce::Array<juce::File> inputs, bool recursive, Callback onDone,
-                                   juce::String outputSubfolderName)
+                                   juce::String outputSubfolderName, juce::File outputFolder)
     {
         JUCE_ASSERT_MESSAGE_THREAD
         ++pending;
-        pool.addJob (new Job (*this, std::move (inputs), recursive, std::move (onDone), std::move (outputSubfolderName)), true);
+        pool.addJob (new Job (*this, std::move (inputs), recursive, std::move (onDone), std::move (outputSubfolderName),
+                              std::move (outputFolder)), true);
     }
 }

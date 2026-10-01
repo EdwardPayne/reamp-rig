@@ -36,10 +36,16 @@ namespace rf::engine
         bool notCalibrated = false;         // latency was an estimate (3.6.4)
         juce::int64 droppedSamples = 0;     // record FIFO overflow
         int callbackGaps = 0;
+        int streamRestarts = 0;             // the device stream stopped and started during the capture
         juce::int64 paddedSamples = 0;
         bool writeFailed = false;           // the destination refused the file (see WriteResult)
+        bool deviceChanged = false;         // the stream restarted at another rate or buffer size:
+                                            // the take was discarded (not ok, not cancelled)
 
-        bool hadDropout() const noexcept    { return droppedSamples > 0 || callbackGaps > 0 || paddedSamples > 0; }
+        bool hadDropout() const noexcept
+        {
+            return droppedSamples > 0 || callbackGaps > 0 || paddedSamples > 0 || streamRestarts > 0;
+        }
     };
 
     /*  One take: plays a source and records the input into a file, sample-aligned
@@ -51,12 +57,16 @@ namespace rf::engine
             same rate:  capture  sourceLength + latency + tail          (device = file rate)
                         discard  latency, write sourceLength + tail
             resampled:  capture  ceil (sourceLength * d / f) + latency + ceil (tail * d / f)
-                                 + the resampler's half width (so the last samples see real input)
+                                 + the resampler's half width + 2 (so the last samples see real
+                                 input; TakeTests pins this margin)
                         discard  latency (device samples), resample d -> f, write sourceLength + tail
 
         update() is called with each engine snapshot (message thread): once every sample has
-        been captured it stops the engine's take, then waits for the writer's result.
-        cancel() stops both and deletes the temporary file.
+        been captured it stops the engine's take, then waits for the writer's result. A stream
+        restart during the capture counts as a dropout (XR); one that came back at another
+        sample rate or buffer size discards the take at once (deviceChanged, with an error).
+        cancel() stops both and deletes the temporary file, and the final file too if the
+        writer had already finished it: a cancelled take never leaves a file behind.
     */
     class Take
     {

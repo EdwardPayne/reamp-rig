@@ -45,6 +45,9 @@ namespace rf::app
         --virtual-rates=<Hz,...>   sample rates the virtual device offers (default 44100,48000,
                                    96000); e.g. 48000 to make every other file "resampled"
         --virtual-speed=<x>        run the virtual device <x> times faster than real time
+        --virtual-reject-rate=<Hz,...>  the virtual device lists these rates but refuses to open
+                                   at them (a driver that fails a rate switch; checks that a batch
+                                   pauses instead of falling back to another device)
 
         --audition-check[=<sec>]   once the lead file is loaded, audition it for <sec> seconds
                                    (default 2), print progress (playhead, meter peaks) to
@@ -123,6 +126,7 @@ namespace rf::app
         bool virtualDevice = false;
         std::optional<int> virtualLoopbackDelay;
         juce::Array<double> virtualRates;
+        juce::Array<double> virtualRejectRates;
         double virtualSpeed = 1.0;
         std::optional<double> auditionCheckSeconds;
         std::optional<juce::File> batchCheckFolder;

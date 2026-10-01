@@ -118,8 +118,10 @@ namespace rf::engine
 
                 auto analysis = analyse (recording.data(), got, *signal, rate);
 
-                // Samples lost to the FIFO or a late callback make the loop's timing unknown.
-                if (got < job.length || job.stream->getNumDropped() > 0 || job.stream->getCallbackGaps() > 0)
+                // Samples lost to the FIFO, a late callback or a stream restart make the loop's
+                // timing unknown.
+                if (got < job.length || job.stream->getNumDropped() > 0 || job.stream->getCallbackGaps() > 0
+                    || job.stream->getRestarts() > 0)
                     analysis.outcome = SyncRepeat::Outcome::dropout;
 
                 const std::scoped_lock lock (mutex);

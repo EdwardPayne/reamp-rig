@@ -1,7 +1,25 @@
 #include "FileItem.h"
 
+#if JUCE_MAC || JUCE_LINUX || JUCE_BSD
+ #include <sys/stat.h>
+#endif
+
 namespace rf::model
 {
+    juce::String fileIdentity (const juce::File& f)
+    {
+        const auto path = f.getFullPathName();
+
+       #if JUCE_MAC || JUCE_LINUX || JUCE_BSD
+        struct stat info {};
+
+        if (::stat (path.toRawUTF8(), &info) == 0)
+            return "inode:" + juce::String ((juce::int64) info.st_dev) + ":" + juce::String ((juce::int64) info.st_ino);
+       #endif
+
+        return "path:" + (juce::File::areFileNamesCaseSensitive() ? path : path.toLowerCase());
+    }
+
     juce::String toString (FileStatus status)
     {
         switch (status)

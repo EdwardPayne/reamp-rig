@@ -345,9 +345,9 @@ namespace rf::ui
             const auto columns = layOutColumns (getWidth());
 
             if (column (columns.lr, rowBounds (index)).contains (pos))
-                return item->hasChannelChoice()
-                         ? "Channel sent to the amp. Applies to all selected stereo files (L / R)."
-                         : "Mono file: played as is, no channel choice.";
+                return ! item->hasChannelChoice() ? "Mono file: played as is, no channel choice."
+                     : item->id == tree.getChannelLock() ? "Channel sent to the amp. Fixed while this file is being recorded."
+                                                         : "Channel sent to the amp. Applies to all selected stereo files (L / R).";
 
             if (column (columns.status, rowBounds (index)).contains (pos)
                 || column (columns.progress, rowBounds (index)).contains (pos))

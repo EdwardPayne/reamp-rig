@@ -1,5 +1,6 @@
 #include "Model/FileTree.h"
 #include "Model/FolderScanner.h"
+#include "Model/OutputNaming.h"
 #include "TestHelpers.h"
 
 #include <map>
@@ -280,6 +281,156 @@ namespace rf::test
                 const auto b = folderContents (backward);
                 expect (f == b);
                 expectEquals (f.at (A.getFullPathName()).joinIntoString (","), juce::String ("a2.wav,a10.wav"));
+            }
+
+            testReviewFixes (tmp, A, B, formats);
+        }
+
+    private:
+        static bool pumpUntil (const std::function<bool()>& done, int timeoutMs)
+        {
+            const auto deadline = juce::Time::getMillisecondCounter() + (juce::uint32) timeoutMs;
+
+            while (! done() && juce::Time::getMillisecondCounter() < deadline)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (5);
+
+            return done();
+        }
+
+        // Review 2026-10-01: U8 (dedupe by file identity), U9 (output folder by path in
+        // single-folder mode), U5 (the sanitized subfolder name), U10 (scanAsync, destruction).
+        void testReviewFixes (const TempDirectory& tmp, const juce::File& A, const juce::File& B, juce::AudioFormatManager& formats)
+        {
+            beginTest ("dedupe by file identity: two differently-cased names");
+            {
+                const auto folder = tmp.folder ("Case");
+                const auto upper = folder.getChildFile ("Kick.wav");
+                const auto lower = folder.getChildFile ("kick.wav");
+                expect (writeWav (upper, 1, 48000.0, 24, 4800));
+
+                // Detected at runtime: on a case-insensitive volume "kick.wav" is "Kick.wav".
+                const auto caseInsensitiveVolume = lower.existsAsFile();
+
+                if (caseInsensitiveVolume)
+                {
+                    logMessage ("    the temp volume is case-insensitive: one file, two spellings (the case-sensitive "
+                                "assertion is skipped)");
+                    const auto r = FolderScanner::scan ({ upper, lower }, false, formats);
+                    expectEquals ((int) r.files.size(), 1, "the same file under two spellings is listed once");
+
+                    FileTree tree;
+                    expectEquals (tree.add (r.files).added, 1);
+                    const auto again = tree.add (FolderScanner::scan ({ lower }, false, formats).files);
+                    expectEquals (again.added, 0);
+                    expectEquals (again.duplicates, 1);
+                    expect (tree.contains (lower) && tree.contains (upper));
+                }
+                else
+                {
+                    expect (writeWav (lower, 2, 44100.0, 16, 4410));
+                    const auto r = FolderScanner::scan ({ folder }, false, formats);
+                    expectEquals ((int) r.files.size(), 2, "two files on a case-sensitive volume");
+
+                    FileTree tree;
+                    expectEquals (tree.add (r.files).added, 2, "both are listed");
+                    expectEquals ((int) tree.getGroups().size(), 1);
+                }
+
+                // A path to the same file with "." and ".." in it is the same file too.
+                FileTree tree;
+                tree.add (FolderScanner::scan ({ upper }, false, formats).files);
+                const auto viaDots = folder.getChildFile ("../Case/./Kick.wav");
+                expect (tree.contains (viaDots));
+
+                folder.deleteRecursively();
+            }
+
+            beginTest ("single output folder inside the source tree: skipped by path, whatever its name");
+            {
+                expect (writeWav (A.getChildFile ("Bounces/a2_reamp.wav"), 1, 48000.0, 24, 480));
+                expect (writeWav (A.getChildFile ("Reamped/real source.wav"), 1, 48000.0, 24, 480));
+
+                // Single-folder mode: the app passes the output folder and no subfolder name.
+                const auto r = FolderScanner::scan ({ A }, true, formats, {}, {}, A.getChildFile ("Bounces"));
+                const auto paths = relativePaths (r.files, tmp.get());
+                expect (! paths.contains ("A/Bounces/a2_reamp.wav"), "outputs are not rescanned");
+                expect (paths.contains ("A/Reamped/real source.wav"), "a source folder that happens to be called Reamped is scanned");
+                expectEquals ((int) r.skippedOutputFolders.size(), 1);
+
+                if (! r.skippedOutputFolders.empty())
+                    expect (r.skippedOutputFolders[0] == A.getChildFile ("Bounces"));
+
+                // Subfolder mode: by name (the old rule), the output folder path is not passed.
+                const auto byName = FolderScanner::scan ({ A }, true, formats, {}, "Reamped");
+                expect (relativePaths (byName.files, tmp.get()).contains ("A/Bounces/a2_reamp.wav"));
+                expect (! relativePaths (byName.files, tmp.get()).contains ("A/Reamped/real source.wav"));
+
+                // An output folder that does not exist yet skips nothing.
+                const auto none = FolderScanner::scan ({ A }, true, formats, {}, {}, A.getChildFile ("Not yet"));
+                expect (none.skippedOutputFolders.empty());
+
+                // Added directly, it is scanned (a choice).
+                const auto direct = FolderScanner::scan ({ A.getChildFile ("Bounces") }, true, formats, {}, {}, A.getChildFile ("Bounces"));
+                expectEquals ((int) direct.files.size(), 1);
+
+                A.getChildFile ("Bounces").deleteRecursively();
+                A.getChildFile ("Reamped").deleteRecursively();
+            }
+
+            beginTest ("subfolder names with # are skipped under the name used on disk");
+            {
+                expect (writeWav (A.getChildFile ("Reamped #2/a2_reamp.wav"), 1, 48000.0, 24, 480));
+
+                NamingOptions o;
+                o.subfolderName = " Reamped #2 ";
+                const auto r = FolderScanner::scan ({ A }, true, formats, {}, OutputNaming::subfolderName (o));
+                expect (! relativePaths (r.files, tmp.get()).contains ("A/Reamped #2/a2_reamp.wav"));
+                expectEquals ((int) r.skippedOutputFolders.size(), 1);
+
+                A.getChildFile ("Reamped #2").deleteRecursively();
+            }
+
+            beginTest ("scanAsync: results on the message thread, in the order queued");
+            {
+                FolderScanner scanner;
+                std::vector<int> order;
+                std::vector<int> counts;
+                auto allOnMessageThread = true;
+
+                for (int i = 0; i < 2; ++i)
+                {
+                    scanner.scanAsync (i == 0 ? juce::Array<juce::File> { A } : juce::Array<juce::File> { B }, i == 0,
+                                       [&, i] (ScanResult r)
+                                       {
+                                           allOnMessageThread = allOnMessageThread && juce::MessageManager::existsAndIsCurrentThread();
+                                           order.push_back (i);
+                                           counts.push_back ((int) r.files.size());
+                                       });
+                }
+
+                expectEquals (scanner.getNumPending(), 2);
+                expect (pumpUntil ([&] { return order.size() == 2; }, 10000), "both scans delivered");
+                expect (order == std::vector<int> { 0, 1 });
+                expect (counts == std::vector<int> { 4, 1 });
+                expect (allOnMessageThread);
+                expectEquals (scanner.getNumPending(), 0);
+            }
+
+            beginTest ("scanAsync: destroying the scanner mid-scan delivers nothing afterwards");
+            {
+                auto delivered = 0;
+
+                {
+                    auto scanner = std::make_unique<FolderScanner>();
+
+                    for (int i = 0; i < 4; ++i)
+                        scanner->scanAsync ({ A, B }, true, [&delivered] (ScanResult) { ++delivered; });
+
+                    scanner.reset();     // stops its thread; results already posted are dropped
+                }
+
+                pumpUntil ([] { return false; }, 300);
+                expectEquals (delivered, 0);
             }
         }
     };

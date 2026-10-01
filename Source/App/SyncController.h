@@ -74,7 +74,9 @@ namespace rf::app
     private:
         void handleSnapshot (const engine::EngineSnapshot&);
         void finished();
-        void deviceStopped();
+        /** The device stopped (empty) or restarted with another rate or buffer size (its
+            description): a running measurement ends without storing anything. */
+        void deviceStopped (const juce::String& reconfigured);
     public:
         void refreshControls();
 

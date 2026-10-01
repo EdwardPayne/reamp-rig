@@ -268,7 +268,8 @@ namespace rf::app
             juce::Logger::writeToLog ("Audio: " + preferred.outputDevice + " is not connected; it is opened by itself once it is");
     }
 
-    void AudioController::applyConfig (const engine::DeviceConfig& wanted, bool persist)
+    engine::DeviceSession::Result AudioController::applyConfig (const engine::DeviceConfig& wanted, bool persist,
+                                                                engine::DeviceSession::Mode mode)
     {
         const auto access = needsPermission ? getMicrophoneAccess() : MicrophoneAccess::granted;
 
@@ -306,7 +307,11 @@ namespace rf::app
                                             "macOS asks once whether Reamp Rig may use the microphone (needed to record "
                                             "any audio input). The device opens as soon as the prompt is answered.");
                 requestMicrophoneIfNeeded();
-                return;
+
+                engine::DeviceSession::Result waiting;
+                waiting.config = resolved;
+                waiting.error = "waiting for microphone access";
+                return waiting;
             }
         }
 
@@ -314,7 +319,7 @@ namespace rf::app
         pendingPersist = false;
 
         applying = true;
-        const auto result = session.open (wanted, access == MicrophoneAccess::granted && ! outputOnly);
+        const auto result = session.open (wanted, access == MicrophoneAccess::granted && ! outputOnly, mode);
         applying = false;
 
         selected = result.config;
@@ -332,8 +337,11 @@ namespace rf::app
         {
             juce::Logger::writeToLog ("Audio device error: " + result.error);
             stopAudition();
-            views.statusBar.setMessage ("Audio device not opened: " + result.error.upToFirstOccurrenceOf ("\n", false, false),
-                                        Tone::error, result.error);
+
+            // An exact (batch or sync) rate switch: the caller says what happened and what to do.
+            if (mode == engine::DeviceSession::Mode::withFallback)
+                views.statusBar.setMessage ("Audio device not opened: " + result.error.upToFirstOccurrenceOf ("\n", false, false),
+                                            Tone::error, result.error);
         }
         else if (inputBlockedByPermission && access == MicrophoneAccess::denied && ! outputOnly)
         {
@@ -360,6 +368,8 @@ namespace rf::app
 
             requestSourceLoad();
         }
+
+        return result;
     }
 
     void AudioController::requestMicrophoneIfNeeded()
@@ -465,6 +475,8 @@ namespace rf::app
         }
 
         deviceWasOpen = status.isOpen;
+        knownRate = status.isOpen ? status.config.sampleRate : 0.0;
+        knownBufferSize = status.isOpen ? status.config.bufferSize : 0;
         applyBatchLock();
     }
 
@@ -481,7 +493,55 @@ namespace rf::app
             return;
         }
 
+        if (checkReconfigured (status))
+            return;
+
         refreshDeviceUi();
+        checkReconnect();
+    }
+
+    bool AudioController::checkReconfigured (const engine::DeviceStatus& status)
+    {
+        // Every change the app makes goes through applyConfig, which records the rate and
+        // buffer size it ended with (refreshDeviceUi). A running device that reports others
+        // was restarted from outside (Audio MIDI Setup, the interface's own software).
+        if (! deviceWasOpen || ! status.isOpen || knownRate <= 0.0)
+            return false;
+
+        if (juce::approximatelyEqual (status.config.sampleRate, knownRate) && status.config.bufferSize == knownBufferSize)
+            return false;
+
+        deviceReconfigured (status);
+        return true;
+    }
+
+    void AudioController::deviceReconfigured (const engine::DeviceStatus& status)
+    {
+        const auto name = selected.outputDevice.isNotEmpty() ? selected.outputDevice : selected.inputDevice;
+        const auto what = name + " now runs at " + format::sampleRate (status.config.sampleRate) + dot()
+                        + juce::String (status.config.bufferSize) + " (was " + format::sampleRate (knownRate) + dot()
+                        + juce::String (knownBufferSize) + ")";
+
+        stopAudition();
+
+        // The running configuration is what the UI and the next rate switch start from.
+        selected.sampleRate = status.config.sampleRate;
+        selected.bufferSize = status.config.bufferSize;
+
+        juce::Logger::writeToLog ("Audio device changed outside the app: " + what);
+        views.statusBar.setMessage ("Audio device changed: " + what + ". It was changed outside Reamp Rig.", Tone::warning,
+                                    "The sample rate or buffer size was changed in Audio MIDI Setup or the interface's "
+                                    "own software. A take in progress is discarded, because its latency and rate no "
+                                    "longer match.");
+        refreshDeviceUi();
+
+        // The batch pauses (its message replaces this one) and Sync stops, as on device loss.
+        if (onDeviceReconfigured != nullptr)
+            onDeviceReconfigured (what);
+
+        if (onSyncDeviceReconfigured != nullptr)
+            onSyncDeviceReconfigured (what);
+
         checkReconnect();
     }
 
@@ -746,9 +806,11 @@ namespace rf::app
         {
             slowTicks = 0;
 
-            if (! applying && deviceWasOpen && ! device.getStatus().isOpen)
+            const auto status = device.getStatus();
+
+            if (! applying && deviceWasOpen && ! status.isOpen)
                 deviceLost();
-            else
+            else if (applying || ! checkReconfigured (status))
                 checkReconnect();
         }
 
@@ -922,21 +984,77 @@ namespace rf::app
         return true;
     }
 
-    double AudioController::switchSampleRate (double rate)
+    juce::String AudioController::switchSampleRate (double rate)
     {
-        auto wanted = selected;
+        const auto status = device.getStatus();
+        auto previous = selected;
+
+        if (status.isOpen)
+        {
+            previous.sampleRate = status.config.sampleRate;
+            previous.bufferSize = status.config.bufferSize;
+        }
+
+        // Exact: the same device at exactly this rate, or an error. A fallback to the system
+        // default devices would record the rest of the batch through the wrong hardware.
+        auto wanted = previous;
         wanted.sampleRate = rate;
-        applyConfig (wanted, false);
-        return device.getStatus().config.sampleRate;
+
+        const auto result = applyConfig (wanted, false, engine::DeviceSession::Mode::exact);
+
+        if (result.ok)
+            return {};
+
+        auto message = result.error;
+
+        if (status.isOpen)
+        {
+            // Back to the rate it ran at, on the same device (never another one).
+            const auto back = applyConfig (previous, false, engine::DeviceSession::Mode::exact);
+            message << (back.ok ? "; it runs at " + format::sampleRate (previous.sampleRate) + " again"
+                                : "; reopening it at " + format::sampleRate (previous.sampleRate) + " failed too ("
+                                  + back.error + ")");
+        }
+
+        juce::Logger::writeToLog ("Audio: sample-rate switch failed: " + message);
+        return message;
     }
 
     void AudioController::restoreConfig (const engine::DeviceConfig& config)
     {
         const auto status = device.getStatus();
 
-        if (! status.isOpen || ! juce::approximatelyEqual (status.config.sampleRate, config.sampleRate)
-            || status.config.bufferSize != config.bufferSize)
+        if (! status.isOpen)
+        {
             applyConfig (config, false);
+            return;
+        }
+
+        auto differs = [&status] (const engine::DeviceConfig& c)
+        {
+            return (c.sampleRate > 0.0 && ! juce::approximatelyEqual (status.config.sampleRate, c.sampleRate))
+                || (c.bufferSize > 0 && status.config.bufferSize != c.bufferSize);
+        };
+
+        if (! engine::DeviceSession::runs (status, config))
+        {
+            // Another device runs now: the preferred one came back (and was reopened) while a
+            // batch was paused. Restoring the start configuration would switch back to the
+            // fallback device for good; its own configuration is the one to keep.
+            if (engine::DeviceSession::runs (status, preferred) && differs (preferred))
+                applyConfig (preferred, false);
+
+            return;
+        }
+
+        // Same device: only the rate and buffer size go back; devices and channels stay.
+        if (differs (config))
+        {
+            auto wanted = selected;
+            wanted.sampleRate = config.sampleRate;
+            wanted.bufferSize = config.bufferSize;
+            applyConfig (wanted, false);
+        }
     }
 
     void AudioController::setBatchActive (bool active)
