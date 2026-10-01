@@ -1,36 +1,44 @@
 # Reamp Forge architecture
 
-Current through phase 2. Sections marked *planned* describe the design from PROMPT.md section 4
+Current through phase 3. Sections marked *planned* describe the design from PROMPT.md section 4
 that later phases implement; they will be expanded (including the sync math) as the code lands.
 
 ## Modules
 
 | Module          | Depends on                | Contents |
 |-----------------|---------------------------|----------|
-| `Source/Engine` | JUCE audio modules only   | *planned:* `AudioDeviceInterface`, `DuplexEngine`, `Take`, `SyncMeasurer`, `Resampler`, `FileWriter`, `LoopbackTestDevice` |
+| `Source/Engine` | JUCE core/events/audio modules only | `AudioDeviceInterface`, `JuceAudioDevice`, `DeviceSession`, `DuplexEngine` (audition + meters), `SourceLoader`; *planned:* `Take`, `SyncMeasurer`, `Resampler`, `FileWriter`, `LoopbackTestDevice` |
 | `Source/Model`  | JUCE core/events/audio formats | `FileItem`, `FileTree`, `FolderScanner`; *planned:* `BatchQueue`, `OutputNaming` |
 | `Source/UI`     | JUCE GUI, Model, Engine API | Theme tokens, embedded fonts, `ForgeLookAndFeel`, the view components |
-| `Source/App`    | everything                | JUCE application, main window, `Settings`, command line (`--open`, dev flags), snapshot aid |
+| `Source/App`    | everything                | JUCE application, main window, `Settings`, `AudioController` (device/audition glue), `MicrophonePermission`, command line (`--open`, dev flags), `VirtualAudioDevice` and snapshot (dev aids) |
 
 The Engine has **no dependency on the GUI**. The UI never reaches into engine internals; it reads
 a thread-safe state snapshot and receives change notifications on the message thread.
 
-## Threads (audio, writer and loader planned; scanner and thumbnail threads implemented)
+## Threads (writer planned; audio, loader, scanner and thumbnail threads implemented)
 
-1. **Audio thread** (device callback only). One duplex `AudioIODeviceCallback` on one device:
-   - writes the next block of the preloaded source (selected channel, gain applied) to the chosen
-     output channel and zeroes all other outputs;
-   - pushes the chosen input channel into a lock-free record FIFO;
-   - updates atomics for meters, position and xrun detection.
-   No allocation, locks, logging or file access. Ever.
-2. **Writer thread**: drains the record FIFO, drops the first `latency` samples, writes
-   `sourceLength + tail` samples to a temp file, renames it on completion, writes the sidecar log.
-3. **Loader thread** (*planned*): decodes the upcoming file(s) into memory ahead of time (next file
-   preloaded while the current one records) and resamples when the device cannot run at the
-   file's rate. Phase 2 already has two background threads of this kind (see "Model" below):
+1. **Audio thread** (device callback only). One duplex callback on one device
+   (`engine::DuplexCallback`, implemented by `DuplexEngine`):
+   - phase 3: zeroes every output channel, writes the preloaded audition source (selected
+     channel, gain applied, ramped over one block when the gain changes) to the chosen output
+     channel, and measures the selected input and output channels (peak + clip atomics);
+   - phase 4 adds: the take (source from sample 0, input into a lock-free record FIFO) and
+     xrun detection.
+   No allocation, locks, logging or file access in our code. (JUCE's `AudioDeviceManager`
+   wraps the callback in its own `audioCallbackLock`, which is only contended while the
+   message thread adds/removes callbacks, i.e. when the device is reconfigured.)
+2. **Writer thread** (*planned*): drains the record FIFO, drops the first `latency` samples,
+   writes `sourceLength + tail` samples to a temp file, renames it on completion, writes the
+   sidecar log.
+3. **Loader thread** (`SourceLoader`, "Source loader", phase 3): decodes the played channel of
+   the lead file into memory, measures its peak, and resamples it to the device rate when they
+   differ (windowed sinc, latency-compensated). Results reach the message thread through
+   `MessageManager::callAsync`; a newer request cancels the older one. Phase 4 reuses it to
+   preload the next file of the batch. Phase 2 already has two background threads of this kind:
    the **folder scanner** thread and the **thumbnail** thread owned by `juce::AudioThumbnailCache`.
 4. **Message thread**: UI, settings persistence, device configuration, batch control. Polls the
-   engine snapshot on a timer for meters, progress and status.
+   engine snapshot (`DuplexEngine::poll()`) at 30 Hz for meters, playhead and status; device
+   state arrives as `DeviceStatus` copies plus `AudioDeviceInterface::Listener` notifications.
 
 ## Data flow for one take (planned)
 
@@ -47,6 +55,82 @@ a thread-safe state snapshot and receives change notifications on the message th
 Latency compensation: output starts at sample 0 of the take and capture starts in the same
 callback; `sourceLength + latency + tail` samples are recorded and the first `latency` discarded,
 so with tail = 0 the result is sample-aligned and exactly as long as the source.
+
+## Audio device layer (phase 3, implemented)
+
+```
+ Settings ──▶ AudioController ──▶ DeviceSession ──▶ AudioDeviceInterface ◀── JuceAudioDevice (CoreAudio/ASIO/WASAPI)
+ (App)        (App, message        (Engine: resolve,    (Engine, abstract)     VirtualAudioDevice (dev aid, App)
+              thread glue)          fallback, open)                            FakeAudioDevice (Tests)
+                   │                                          │ setCallback
+                   │ startAudition / setGainDb / poll         ▼
+                   └────────────────────────────────────▶ DuplexEngine ◀── LoadedSource ◀── SourceLoader
+```
+
+- **`AudioDeviceInterface`** (`Engine/AudioDeviceInterface.h`): driver types, device names per
+  type and direction, default devices, `open(DeviceConfig)`, `close()`, `getStatus()`
+  (`DeviceStatus`: open flag, running config, channel names of both directions, supported rates
+  and buffer sizes, driver-reported input/output latency, last error), `setCallback()`, and a
+  listener called on the message thread when devices or state change. `DeviceConfig` holds the
+  type, input and output device names (the same name for one duplex device), rate, buffer size,
+  and one input and one output channel as index **and** driver name. A direction whose channel is
+  -1 is not opened at all. The callback gets a `StreamLayout` (rate, buffer, and where the
+  selected channels are in the per-callback arrays) before streaming starts.
+- **`JuceAudioDevice`** over `juce::AudioDeviceManager`: opens exactly the selected input and
+  output channel (JUCE passes only open channels, packed in ascending order, so the layout index
+  comes from `packedChannelIndex`). Opening is two steps when the device changes: create it with
+  no channels to learn its channel lists, then open the stream with the chosen channels. The
+  manager's XML state and default-device fallbacks are never used; if the manager ever starts a
+  device other than the requested one (device list change), the callback is not forwarded to it
+  and the outputs are zeroed. On macOS JUCE 9 always runs a device through a private aggregate
+  device, which also combines a separate input and output device into one duplex callback (with
+  drift correction, hence "not sample-synchronized, for testing only" in the UI).
+- **`DeviceSession`** (pure logic over the interface, unit tested with a fake device): resolves
+  a wanted config against what is present: driver type (else the first), output device (else the
+  system default, else the first), input device (else the output device if it has inputs, else
+  the default), opens it (sample rate and buffer size fall back to the nearest supported value),
+  then matches channels by name, then index, else the first channel, reopening only if the
+  channels changed. Every fallback returns a plain-language warning; if the device will not
+  open, the system defaults are tried once; nothing throws or crashes when nothing opens.
+- **`AudioController`** (App): opens the saved config at startup (dev flags may override it for
+  one run) and **never persists at startup**, so a missing Apollo falls back for this session
+  only and is used again once it is back. Every user change in the AUDIO section is applied and
+  persisted (`Settings::setDeviceConfig`, `setOutputGainDb`). Warnings and errors go to the
+  status bar and the log. It fills the AUDIO combos from `DeviceStatus`, shows the split-device
+  notice, the top-bar summary (`Apollo Twin · 48 kHz · 256`, "No device" when closed), the sync
+  chip ("No device" / "Not synced" until phase 5) and the driver latency in the SYNC section.
+- **Microphone permission (macOS, `MicrophonePermission.mm`)**: `AVCaptureDevice`
+  authorization status and a non-blocking request. Important finding: because JUCE's aggregate
+  device carries *all* streams of its sub-devices, creating any CoreAudio device that has input
+  streams (even for output only) makes coreaudiod wait for the microphone prompt and blocks the
+  calling thread. So while the status is *undetermined* the controller opens nothing (unless the
+  device is output-only and `--no-input` is set), asks, and opens the wanted config when the
+  answer arrives. *Denied*: the device opens without input and the status bar explains how to
+  allow access in System Settings. Without access CoreAudio would deliver silence anyway.
+
+## Audition path (phase 3, implemented)
+
+```
+ lead file (FileTree) ─▶ SourceLoader (loader thread): decode played channel, peak, resample
+                              │ callAsync
+                              ▼
+ AudioController: LoadedSource (immutable, shared_ptr) ── startAudition(source, start) ──▶ DuplexEngine
+                                                                                          (atomic Command*)
+ audio thread: out[selected] = source[pos..] * gain; other outputs zeroed; pos, peaks → atomics
+ message thread (30 Hz): poll() → meters, waveform playhead, "finished" → stop
+```
+
+- The lead's played channel is decoded when the lead or its L/R choice changes, and again when
+  the device rate changes; its peak drives "Peak at output" (file peak + output level, `warn`
+  with "clips" above 0 dBFS).
+- `startAudition` publishes an immutable `Command {source, startSample, generation}` through an
+  atomic pointer. The audio thread notices a new pointer, jumps to its start and plays; at the
+  end it publishes the command's generation as finished. Stopping swaps in null and *retires*
+  the command: it is freed only after the callback counter has moved past the value read at
+  retirement (or the stream has stopped), so the audio thread never sees freed memory and never
+  frees anything itself.
+- Space (window-level `keyPressed`, reached when the focused component does not use it) and the
+  Audition/Stop button toggle it; buttons do not keep keyboard focus. Changing the lead stops it.
 
 ## UI (phase 1, implemented)
 
@@ -68,6 +152,13 @@ so with tail = 0 the result is sample-aligned and exactly as long as the source.
   L/R selector, status and progress bar. Selection lives in the model; the view keeps collapse
   state, the shift-click anchor and hover. Shared helpers: `drawChevron`, `drawRightChevron`,
   `drawBadge` (LookAndFeel.h) and `rf::ui::format` (Format.h).
+- Phase 3: `rf::ui::LevelMeter` (Meters.h): custom horizontal peak meter, -60..0 dBFS, 24 dB/s
+  fall, 1.5 s peak hold (line + readout), a CLIP box that lights in `warn` and latches until the
+  meter is clicked. `NoticeLine` (badge + `warn` text) and hideable rows in `SidebarSection`
+  (the split-device notice). `WaveformPanel::setPlayhead` draws a 2 px accent playhead, switches
+  the time readout to the playhead (accent) and pages the view along when zoomed in; phase 4
+  reuses it for the batch. All AUDIO controls are stock JUCE widgets drawn entirely by
+  `ForgeLookAndFeel` (combos, popups, slider); `juce::AudioDeviceSelectorComponent` is not used.
 
 ## Model (phase 2, implemented)
 
@@ -118,12 +209,15 @@ the thumbnail drawing; cmd+scroll or pinch zooms around the mouse (minimum 50 ms
 scroll or the scrollbar pans. Phase 4 adds a second, in-memory thumbnail for the recorded result
 (current/last file only, PROMPT.md 3.5.2).
 
-## Settings (phase 2, implemented)
+## Settings (phases 2-3, implemented)
 
-`rf::app::Settings` wraps `juce::ApplicationProperties` (XML file
-`~/Library/Application Support/Reamp Forge/Reamp Forge.settings` on macOS). It is owned by the
-application object and passed to the main window. Typed accessors are added per phase; phase 2
-has `includeSubfolders` (default on). The file list is never persisted.
+`rf::app::Settings` owns a `juce::PropertiesFile` (XML file
+`~/Library/Application Support/Reamp Forge/Reamp Forge.settings` on macOS; tests pass their own
+file). It is owned by the application object and passed to the main window. Keys so far:
+`includeSubfolders` (default on); `deviceType`, `inputDevice`, `outputDevice`, `sampleRate`,
+`bufferSize`, `inputChannel` + `inputChannelName`, `outputChannel` + `outputChannelName`
+(empty/0/-1 = not chosen), `outputGainDb` (-60..+12, default 0, clamped on read and write).
+Hand-edited garbage falls back to safe values. The file list is never persisted.
 
 ## Tests
 
@@ -131,7 +225,13 @@ JUCE `UnitTest`, not Catch2: it is already part of `juce_core`, needs no extra d
 dependency, and the code under test uses JUCE types throughout. `Tests/TestMain.cpp` is a JUCE
 console app (`ReampForgeTests`) that runs every test or one category
 (`--category=<name>`) and exits non-zero on any failure. CMake registers one ctest entry per
-category (`FolderScanner`, `FileTree`, `FileTreeView`). Model sources are compiled into both the
+category (`FolderScanner`, `FileTree`, `FileTreeView`, `Settings`, `DeviceSession`,
+`DuplexEngine`, `SourceLoader`). Device logic runs against `Tests/FakeAudioDevice.h`, a
+scriptable `AudioDeviceInterface` (types, devices, named channels, rates, buffer sizes, failing
+devices) whose `render()` drives the callback block by block and captures every output channel;
+it passes *all* channels to the callback, so the tests also prove unused outputs are zeroed.
+Engine sources without hardware dependencies are compiled into the tests; `JuceAudioDevice` is
+app-only. Model sources are compiled into both the
 app and the test executable (JUCE modules are compiled per target, so a shared static library
 would duplicate them). Filesystem tests create a fresh temporary directory with small WAV files
 written by `juce::WavAudioFormat` and delete it afterwards. `FileTreeView` keyboard handling is

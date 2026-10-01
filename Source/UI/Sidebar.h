@@ -10,6 +10,8 @@ namespace rf::ui
     public:
         Sidebar();
 
+        AudioSection& getAudioSection() noexcept       { return content.audio; }
+        SyncSection& getSyncSection() noexcept         { return content.sync; }
         OptionsSection& getOptionsSection() noexcept   { return content.options; }
 
         void paint (juce::Graphics&) override;

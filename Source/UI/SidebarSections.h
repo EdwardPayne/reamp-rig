@@ -1,11 +1,13 @@
 #pragma once
 
+#include "Meters.h"
 #include "SidebarSection.h"
 
 namespace rf::ui
 {
-    /*  The four sidebar sections. Apart from "Include subfolders" (phase 2) the controls are
-        still placeholders; they are connected to settings and the engine in phases 3 and 4.
+    /*  The four sidebar sections. AUDIO (phase 3) and "Include subfolders" (phase 2) are live;
+        the rest are placeholders connected in phases 4 and 5. The sections only own and lay
+        out their controls; the app wires them to settings and the engine.
     */
 
     class AudioSection final : public SidebarSection
@@ -13,9 +15,32 @@ namespace rf::ui
     public:
         AudioSection();
 
+        juce::ComboBox& getTypeBox() noexcept              { return typeBox; }
+        juce::ComboBox& getOutputDeviceBox() noexcept      { return outputDeviceBox; }
+        juce::ComboBox& getInputDeviceBox() noexcept       { return inputDeviceBox; }
+        juce::ComboBox& getSampleRateBox() noexcept        { return sampleRateBox; }
+        juce::ComboBox& getBufferSizeBox() noexcept        { return bufferSizeBox; }
+        juce::ComboBox& getOutputChannelBox() noexcept     { return outputChannelBox; }
+        juce::ComboBox& getInputChannelBox() noexcept      { return inputChannelBox; }
+        LevelMeter& getOutputMeter() noexcept              { return outputMeter; }
+        LevelMeter& getInputMeter() noexcept               { return inputMeter; }
+        juce::Slider& getOutputLevel() noexcept            { return outputLevel; }
+        ValueReadout& getPeakReadout() noexcept            { return peakReadout; }
+        juce::TextButton& getAuditionButton() noexcept     { return auditionButton; }
+
+        /** Shows the "not sample-synchronized, for testing only" line (separate in/out devices). */
+        void setSplitDevicesNoticeVisible (bool);
+
+        /** Switches the Audition button between "Audition" and "Stop". */
+        void setAuditioning (bool);
+
     private:
-        juce::ComboBox deviceBox, outputChannelBox, inputChannelBox;
+        juce::ComboBox typeBox, outputDeviceBox, inputDeviceBox, sampleRateBox, bufferSizeBox,
+                       outputChannelBox, inputChannelBox;
+        NoticeLine splitNotice;
+        LevelMeter outputMeter { "Out" }, inputMeter { "In" };
         juce::Slider outputLevel;
+        ValueReadout peakReadout;
         juce::TextButton auditionButton { "Audition" };
     };
 
@@ -23,6 +48,9 @@ namespace rf::ui
     {
     public:
         SyncSection();
+
+        /** Driver-reported input + output latency (reference for phase 5's measurement). */
+        ValueReadout& getDriverReadout() noexcept   { return driver; }
 
     private:
         juce::Label hint;

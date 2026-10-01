@@ -6,11 +6,11 @@ namespace rf::app
 {
     namespace metric = ui::theme::metric;
 
-    MainWindow::MainWindow (const juce::String& name, Settings& settings)
+    MainWindow::MainWindow (const juce::String& name, Settings& settings, bool useVirtualDevice)
         : DocumentWindow (name, ui::theme::colour::bg, DocumentWindow::allButtons)
     {
         setUsingNativeTitleBar (true);
-        setContentOwned (new MainComponent (settings), true);
+        setContentOwned (new MainComponent (settings, useVirtualDevice), true);
 
         setResizable (true, false);
         setResizeLimits (metric::minWindowWidth, metric::minWindowHeight, 16384, 16384);

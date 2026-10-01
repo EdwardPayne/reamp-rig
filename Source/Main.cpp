@@ -22,15 +22,24 @@ public:
         lookAndFeel = std::make_unique<rf::ui::ForgeLookAndFeel>();
         juce::LookAndFeel::setDefaultLookAndFeel (lookAndFeel.get());
 
-        settings = std::make_unique<rf::app::Settings>();
-        mainWindow = std::make_unique<rf::app::MainWindow> (getApplicationName(), *settings);
-
-        // --open=<path> adds files/folders; --snapshot and friends are development aids.
-        // See App/CommandLine.h.
+        // --open=<path> adds files/folders; --snapshot, the device flags and friends are
+        // development aids. See App/CommandLine.h.
         const auto options = rf::app::LaunchOptions::parse (getCommandLineParameterArray(),
                                                             juce::File::getCurrentWorkingDirectory());
 
-        mainWindow->getMainComponent().applyLaunchOptions (options);
+        settings = std::make_unique<rf::app::Settings>();
+        mainWindow = std::make_unique<rf::app::MainWindow> (getApplicationName(), *settings, options.virtualDevice);
+
+        std::function<void (bool)> onAuditionCheckDone;
+
+        if (options.auditionCheckSeconds.has_value() && ! options.snapshotFile.has_value())
+            onAuditionCheckDone = [this] (bool ok)
+            {
+                setApplicationReturnValue (ok ? 0 : 1);
+                quit();
+            };
+
+        mainWindow->getMainComponent().applyLaunchOptions (options, onAuditionCheckDone);
 
         if (options.snapshotFile.has_value())
             scheduleSnapshot (*options.snapshotFile);

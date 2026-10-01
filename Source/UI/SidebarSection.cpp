@@ -60,14 +60,47 @@ namespace rf::ui
         rows.push_back (std::move (row));
     }
 
+    void SidebarSection::setRowVisible (juce::Component& component, bool shouldBeVisible)
+    {
+        for (auto& row : rows)
+        {
+            const auto contains = std::any_of (row.fields.begin(), row.fields.end(),
+                                               [&] (const Field& f) { return f.component == &component; });
+
+            if (! contains || row.visible == shouldBeVisible)
+                continue;
+
+            row.visible = shouldBeVisible;
+
+            for (size_t i = 0; i < row.fields.size(); ++i)
+            {
+                row.fields[i].component->setVisible (shouldBeVisible);
+                row.labels[i]->setVisible (shouldBeVisible && row.fields[i].label.isNotEmpty());
+            }
+
+            resized();
+
+            if (onPreferredHeightChanged != nullptr)
+                onPreferredHeightChanged();
+        }
+    }
+
     int SidebarSection::getPreferredHeight() const
     {
         auto height = metric::sectionPadding + titleHeight + metric::grid + metric::sectionPadding;
 
-        for (const auto& row : rows)
-            height += row.getHeight() + rowGap;
+        auto numVisible = 0;
 
-        return rows.empty() ? height : height - rowGap;
+        for (const auto& row : rows)
+        {
+            if (row.visible)
+            {
+                height += row.getHeight() + rowGap;
+                ++numVisible;
+            }
+        }
+
+        return numVisible == 0 ? height : height - rowGap;
     }
 
     void SidebarSection::paint (juce::Graphics& g)
@@ -89,6 +122,9 @@ namespace rf::ui
 
         for (auto& row : rows)
         {
+            if (! row.visible)
+                continue;
+
             auto rowArea = area.removeFromTop (row.getHeight());
             area.removeFromTop (rowGap);
 
@@ -117,9 +153,13 @@ namespace rf::ui
     {
     }
 
-    void ValueReadout::setValue (const juce::String& newValue)
+    void ValueReadout::setValue (const juce::String& newValue, std::optional<juce::Colour> colour)
     {
+        if (newValue == value && colour == valueColour)
+            return;
+
         value = newValue;
+        valueColour = colour;
         repaint();
     }
 
@@ -131,8 +171,35 @@ namespace rf::ui
         g.setFont (Fonts::mono (type::fieldLabelSize));
         g.drawText (key, area, juce::Justification::centredLeft, false);
 
-        g.setColour (colour::heading);
+        g.setColour (valueColour.value_or (colour::heading));
         g.setFont (Fonts::mono (type::controlSize, FontWeight::medium));
         g.drawText (value, area, juce::Justification::centredRight, true);
+    }
+
+    //==============================================================================
+    NoticeLine::NoticeLine (juce::String t)
+        : text (std::move (t))
+    {
+    }
+
+    void NoticeLine::setText (const juce::String& t)
+    {
+        text = t;
+        repaint();
+    }
+
+    void NoticeLine::paint (juce::Graphics& g)
+    {
+        constexpr int badgeSize = 12;
+        auto area = getLocalBounds();
+
+        // Badge aligned with the first line; the text may wrap onto a second line.
+        drawBadge (g, area.removeFromLeft (badgeSize).removeFromTop (metric::fieldLabelHeight)
+                          .withSizeKeepingCentre (badgeSize, badgeSize).toFloat(), "!", colour::warn);
+        area.removeFromLeft (metric::grid);
+
+        g.setColour (colour::warn);
+        g.setFont (Fonts::mono (type::fieldLabelSize));
+        g.drawFittedText (text, area, juce::Justification::topLeft, 2, 1.0f);
     }
 }

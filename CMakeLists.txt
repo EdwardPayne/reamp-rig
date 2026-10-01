@@ -77,6 +77,13 @@ set(REAMPFORGE_MODEL_SOURCES
     Source/Model/FileTree.cpp
     Source/Model/FolderScanner.cpp)
 
+# Engine sources without a hardware dependency (compiled into the app and the tests).
+# JuceAudioDevice (the real device) is app-only; the tests use a fake device.
+set(REAMPFORGE_ENGINE_SOURCES
+    Source/Engine/DeviceSession.cpp
+    Source/Engine/DuplexEngine.cpp
+    Source/Engine/SourceLoader.cpp)
+
 #===============================================================================
 # Application
 juce_add_gui_app(ReampForge
@@ -91,11 +98,13 @@ juce_add_gui_app(ReampForge
 
 target_sources(ReampForge PRIVATE
     Source/Main.cpp
+    Source/App/AudioController.cpp
     Source/App/CommandLine.cpp
     Source/App/MainComponent.cpp
     Source/App/MainWindow.cpp
     Source/App/Settings.cpp
     Source/App/Snapshot.cpp
+    Source/App/VirtualAudioDevice.cpp
     Source/UI/Fonts.cpp
     Source/UI/LookAndFeel.cpp
     Source/UI/TopBar.cpp
@@ -105,10 +114,19 @@ target_sources(ReampForge PRIVATE
     Source/UI/Sidebar.cpp
     Source/UI/WaveformPanel.cpp
     Source/UI/StatusBar.cpp
+    Source/UI/Meters.cpp
+    Source/Engine/JuceAudioDevice.cpp
+    ${REAMPFORGE_ENGINE_SOURCES}
     ${REAMPFORGE_MODEL_SOURCES})
 
 if(APPLE)
-    target_sources(ReampForge PRIVATE Source/App/MacAppearance.mm)
+    target_sources(ReampForge PRIVATE
+        Source/App/MacAppearance.mm
+        Source/App/MicrophonePermission.mm)
+    # AVCaptureDevice authorization for the microphone permission (PROMPT.md section 4.7).
+    target_link_libraries(ReampForge PRIVATE "-framework AVFoundation")
+else()
+    target_sources(ReampForge PRIVATE Source/App/MicrophonePermission.cpp)
 endif()
 
 target_include_directories(ReampForge PRIVATE Source)
@@ -119,7 +137,6 @@ target_compile_definitions(ReampForge PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:ReampForge,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:ReampForge,JUCE_VERSION>")
 
-# The audio device module is linked now so the toolchain is proven for phase 3.
 target_link_libraries(ReampForge
     PRIVATE
         ReampForgeAssets
@@ -157,9 +174,15 @@ if(REAMPFORGE_BUILD_TESTS)
         Tests/FileTreeTests.cpp
         Tests/FolderScannerTests.cpp
         Tests/FileTreeViewTests.cpp
+        Tests/SettingsTests.cpp
+        Tests/DeviceSessionTests.cpp
+        Tests/DuplexEngineTests.cpp
+        Tests/SourceLoaderTests.cpp
+        Source/App/Settings.cpp
         Source/UI/Fonts.cpp
         Source/UI/LookAndFeel.cpp
         Source/UI/FileTreeView.cpp
+        ${REAMPFORGE_ENGINE_SOURCES}
         ${REAMPFORGE_MODEL_SOURCES})
 
     target_include_directories(ReampForgeTests PRIVATE Source Tests)
@@ -175,12 +198,13 @@ if(REAMPFORGE_BUILD_TESTS)
             juce::juce_events
             juce::juce_audio_basics
             juce::juce_audio_formats
+            juce::juce_data_structures
             juce::juce_gui_basics
         PUBLIC
             juce::juce_recommended_config_flags
             juce::juce_recommended_warning_flags)
 
-    foreach(_rf_category FolderScanner FileTree FileTreeView)
+    foreach(_rf_category FolderScanner FileTree FileTreeView Settings DeviceSession DuplexEngine SourceLoader)
         add_test(NAME ${_rf_category}
                  COMMAND ReampForgeTests --category=${_rf_category})
     endforeach()

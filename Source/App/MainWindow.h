@@ -12,7 +12,7 @@ namespace rf::app
     class MainWindow final : public juce::DocumentWindow
     {
     public:
-        MainWindow (const juce::String& name, Settings&);
+        MainWindow (const juce::String& name, Settings&, bool useVirtualDevice);
 
         MainComponent& getMainComponent();
 

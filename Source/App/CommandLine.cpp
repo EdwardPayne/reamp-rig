@@ -40,6 +40,32 @@ namespace rf::app
                 options.selectNames.add (value);
             else if (optionValue (arg, "audition-at", value))
                 options.auditionStart = value.getDoubleValue();
+            else if (optionValue (arg, "device-type", value))
+                options.deviceType = value;
+            else if (optionValue (arg, "device", value))
+                options.inputDevice = options.outputDevice = value;
+            else if (optionValue (arg, "output-device", value))
+                options.outputDevice = value;
+            else if (optionValue (arg, "input-device", value))
+                options.inputDevice = value;
+            else if (optionValue (arg, "sample-rate", value))
+                options.sampleRate = value.getDoubleValue();
+            else if (optionValue (arg, "buffer-size", value))
+                options.bufferSize = value.getIntValue();
+            else if (optionValue (arg, "output-channel", value))
+                options.outputChannel = value;
+            else if (optionValue (arg, "input-channel", value))
+                options.inputChannel = value;
+            else if (optionValue (arg, "output-level", value))
+                options.outputLevelDb = (float) value.getDoubleValue();
+            else if (arg == "--no-input")
+                options.noInput = true;
+            else if (arg == "--virtual-device")
+                options.virtualDevice = true;
+            else if (arg == "--audition-check")
+                options.auditionCheckSeconds = 2.0;
+            else if (optionValue (arg, "audition-check", value))
+                options.auditionCheckSeconds = juce::jmax (0.1, value.getDoubleValue());
             else if (optionValue (arg, "view", value) && value.containsChar (':'))
                 options.view = juce::Range<double> (value.upToFirstOccurrenceOf (":", false, false).getDoubleValue(),
                                                     value.fromFirstOccurrenceOf (":", false, false).getDoubleValue());

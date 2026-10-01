@@ -48,9 +48,9 @@ namespace rf::ui
     //==============================================================================
     TopBar::TopBar()
     {
-        deviceSummary = utf8 ("No device \xc2\xb7 \xe2\x80\x94 kHz \xc2\xb7 \xe2\x80\x94");
+        deviceSummary = "No device";
 
-        syncChip.setStatus ("Not synced", colour::warn);
+        syncChip.setStatus ("No device", colour::muted);
         addAndMakeVisible (syncChip);
 
         setButtonStyle (startButton, ButtonStyle::primary);
@@ -63,6 +63,30 @@ namespace rf::ui
 
         for (auto* b : { &startButton, &pauseButton, &stopButton })
             addAndMakeVisible (b);
+    }
+
+    void TopBar::setDeviceSummary (const juce::String& summary, const juce::String& tooltip)
+    {
+        deviceTooltip = tooltip;
+
+        if (summary != deviceSummary)
+        {
+            deviceSummary = summary;
+            repaint (deviceArea);
+        }
+    }
+
+    void TopBar::setSyncStatus (const juce::String& text, juce::Colour c, const juce::String& tooltip)
+    {
+        syncChip.setStatus (text, c);
+        syncChip.setTooltip (tooltip);
+        resized();
+    }
+
+    juce::String TopBar::getTooltip()
+    {
+        const auto mouse = getMouseXYRelative();
+        return deviceArea.contains (mouse) ? deviceTooltip : juce::String();
     }
 
     void TopBar::paint (juce::Graphics& g)

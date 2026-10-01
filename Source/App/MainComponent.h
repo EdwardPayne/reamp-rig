@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "../Engine/JuceAudioDevice.h"
 #include "../Model/FileTree.h"
 #include "../Model/FolderScanner.h"
 #include "../UI/FileTreeView.h"
@@ -10,6 +11,7 @@
 #include "../UI/Theme.h"
 #include "../UI/TopBar.h"
 #include "../UI/WaveformPanel.h"
+#include "AudioController.h"
 #include "CommandLine.h"
 #include "Settings.h"
 
@@ -29,27 +31,32 @@ namespace rf::app
 
         Owns the file list model and the folder scanner, accepts file/folder drops anywhere
         in the window, and keeps the waveform panel and status bar in step with the list.
+        Owns the audio device and the AudioController (phase 3); Space toggles audition.
     */
     class MainComponent final : public juce::Component,
                                 public juce::FileDragAndDropTarget,
                                 private model::FileTree::Listener
     {
     public:
-        explicit MainComponent (Settings&);
+        /** `useVirtualDevice` selects the development VirtualAudioDevice instead of the audio
+            hardware (--virtual-device). */
+        MainComponent (Settings&, bool useVirtualDevice);
         ~MainComponent() override;
 
         /** Scans files/folders off the message thread and adds the result to the list.
             `onAdded` runs on the message thread after the result has been added. */
         void addPaths (const juce::Array<juce::File>&, std::function<void()> onAdded = {});
 
-        /** Development aid for --select / --audition-at / --view (see CommandLine.h). */
-        void applyLaunchOptions (const LaunchOptions&);
+        /** Opens the audio device and applies --open plus the development aids (see
+            CommandLine.h). `onAuditionCheckDone` is called when --audition-check finishes. */
+        void applyLaunchOptions (const LaunchOptions&, std::function<void (bool ok)> onAuditionCheckDone = {});
 
         /** True while scans are pending or the selected file's waveform is still building. */
         bool isBusy() const;
 
         void paint (juce::Graphics&) override;
         void resized() override;
+        bool keyPressed (const juce::KeyPress&) override;
 
         bool isInterestedInFileDrag (const juce::StringArray&) override;
         void fileDragEnter (const juce::StringArray&, int, int) override;
@@ -76,6 +83,11 @@ namespace rf::app
         juce::StretchableLayoutManager splitLayout;
         juce::StretchableLayoutResizerBar splitter { &splitLayout, 1, false };
         int waveformHeight = ui::theme::metric::waveformDefaultHeight;
+
+        // Declared after the views they drive; the controller is destroyed first, which
+        // detaches the audio callback before the device goes away.
+        std::unique_ptr<engine::AudioDeviceInterface> audioDevice;
+        std::unique_ptr<AudioController> audio;
 
         std::unique_ptr<juce::FileChooser> chooser;
         juce::TooltipWindow tooltipWindow { this, 600 };

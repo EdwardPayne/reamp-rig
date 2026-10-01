@@ -2,6 +2,8 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
+#include <optional>
+
 namespace rf::ui
 {
     /*  Bottom panel: source waveform above, recorded result below, on a shared time axis
@@ -15,8 +17,9 @@ namespace rf::ui
 
         Time axis: the ruler follows the visible range. Cmd+scroll or pinch zooms around the
         mouse; plain scroll (or the scrollbar) pans while zoomed. Clicking or dragging in the
-        lanes sets the audition start point (accent marker); nothing plays until phase 3.
-        The "Recorded" lane is a placeholder until phase 4.
+        lanes sets the audition start point (accent marker with a flag). While a file plays
+        (audition now, the batch in phase 4) a 2 px accent playhead moves across the lanes and
+        the view follows it when zoomed in. The "Recorded" lane is a placeholder until phase 4.
     */
     class WaveformPanel final : public juce::Component,
                                 public juce::SettableTooltipClient,
@@ -39,6 +42,10 @@ namespace rf::ui
         double getAuditionStart() const noexcept          { return auditionStart; }
         void setAuditionStart (double seconds);
         std::function<void (double)> onAuditionStartChanged;
+
+        /** Playback position in seconds, or nullopt when nothing plays. */
+        void setPlayhead (std::optional<double> seconds);
+        std::optional<double> getPlayhead() const noexcept     { return playhead; }
 
         juce::Range<double> getVisibleRange() const noexcept   { return visible; }
         void setVisibleRange (juce::Range<double>);
@@ -63,6 +70,7 @@ namespace rf::ui
         void paintEmptyLane (juce::Graphics&, juce::Rectangle<int> label, juce::Rectangle<int> wave,
                              const juce::String& name, const juce::String& text) const;
         void paintMarker (juce::Graphics&) const;
+        void paintPlayhead (juce::Graphics&) const;
 
         double xToTime (float x) const;
         float timeToX (double t) const;
@@ -83,6 +91,7 @@ namespace rf::ui
         double sampleRate = 0.0;
         double duration = 0.0;
         double auditionStart = 0.0;
+        std::optional<double> playhead;
         juce::Range<double> visible { 0.0, 10.0 };
 
         // Laid out in resized().

@@ -31,6 +31,9 @@ namespace rf::ui
     Sidebar::Sidebar()
     {
         viewport.setViewedComponent (&content, false);
+
+        for (auto* section : content.sections)
+            section->onPreferredHeightChanged = [this] { resized(); content.resized(); };
         viewport.setScrollBarsShown (true, false);
         viewport.setScrollBarThickness (theme::metric::grid);
         addAndMakeVisible (viewport);

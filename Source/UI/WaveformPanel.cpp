@@ -91,6 +91,7 @@ namespace rf::ui
         duration      = rate > 0.0 ? (double) length / rate : 0.0;
         activeChannel = channel;
         auditionStart = 0.0;
+        playhead.reset();
 
         // Reads the header here; the waveform data is built on the cache's thread.
         thumbnail.setSource (new juce::FileInputSource (file));
@@ -106,6 +107,7 @@ namespace rf::ui
 
         thumbnail.clear();
         sourceFile = juce::File();
+        playhead.reset();
         numChannels = 0;
         duration = 0.0;
         auditionStart = 0.0;
@@ -135,6 +137,24 @@ namespace rf::ui
             if (onAuditionStartChanged != nullptr)
                 onAuditionStartChanged (auditionStart);
         }
+    }
+
+    void WaveformPanel::setPlayhead (std::optional<double> seconds)
+    {
+        if (seconds.has_value())
+            seconds = juce::jlimit (0.0, juce::jmax (0.0, duration), *seconds);
+
+        if (seconds == playhead)
+            return;
+
+        playhead = seconds;
+
+        // Follow the playhead when zoomed in: page forward once it leaves the view.
+        if (playhead.has_value() && hasSource() && visible.getLength() < duration - 1.0e-9
+            && (*playhead > visible.getEnd() || *playhead < visible.getStart()))
+            setVisibleRange (visible.movedToStartAt (*playhead));
+
+        repaint();
     }
 
     double WaveformPanel::getMinVisibleLength() const
@@ -309,6 +329,7 @@ namespace rf::ui
         g.fillRect (laneLabelWidth - 1, scrollArea.getY(), 1, scrollArea.getHeight());
 
         paintMarker (g);
+        paintPlayhead (g);
     }
 
     void WaveformPanel::paintHeader (juce::Graphics& g, juce::Rectangle<int> area) const
@@ -320,11 +341,13 @@ namespace rf::ui
         const auto label = area.removeFromLeft (laneLabelWidth - metric::sectionPadding);
         drawSectionLabel (g, "Waveform", label);
 
-        const auto readout = format::time (hasSource() ? auditionStart : 0.0) + " / " + format::time (duration);
+        // While playing, the readout follows the playhead (accent) instead of the marker.
+        const auto shown = playhead.has_value() ? *playhead : (hasSource() ? auditionStart : 0.0);
+        const auto readout = format::time (shown) + " / " + format::time (duration);
         const auto readoutFont = Fonts::mono (type::controlSize, FontWeight::medium);
         const auto readoutWidth = juce::GlyphArrangement::getStringWidthInt (readoutFont, readout);
 
-        g.setColour (colour::heading);
+        g.setColour (playhead.has_value() ? colour::accent : colour::heading);
         g.setFont (readoutFont);
         g.drawText (readout, area.removeFromRight (readoutWidth), juce::Justification::centredRight, false);
 
@@ -477,5 +500,17 @@ namespace rf::ui
                           (float) x + (float) markerFlagSize * 0.5f + 1.0f, (float) top - (float) markerFlagSize,
                           (float) x + 0.5f, (float) top);
         g.fillPath (flag);
+    }
+
+    void WaveformPanel::paintPlayhead (juce::Graphics& g) const
+    {
+        if (! hasSource() || ! playhead.has_value() || *playhead < visible.getStart() || *playhead > visible.getEnd())
+            return;
+
+        const auto x = juce::roundToInt (timeToX (*playhead));
+        const auto top = rulerArea.getY();
+
+        g.setColour (colour::accent);
+        g.fillRect (x - 1, top, 2, recordedWaveArea.getBottom() - top);
     }
 }

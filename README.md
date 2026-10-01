@@ -3,9 +3,12 @@
 Batch re-amping of guitar DI tracks through a hardware amp via an audio interface.
 Desktop app, C++20 + JUCE 9.0.3 (fetched automatically), CMake.
 
-Status: **phase 2 (files + waveform)**. Files and folders can be dropped or added, are scanned
+Status: **phase 3 (audio device layer)**. Files and folders can be dropped or added, are scanned
 and listed grouped by folder with multi-select and L/R choice, and the selected file's waveform
-is shown with zoom and an audition start marker. No audio device or processing yet.
+is shown with zoom and an audition start marker. The audio device, sample rate, buffer size and
+the output/input channels (with the driver's channel names) are chosen in the AUDIO section and
+remembered; input/output meters, the output level and Audition (Space) work. No recording or
+batch processing yet.
 
 ## Requirements
 
@@ -88,10 +91,35 @@ have finished. Combine it with `--open=` and the development flags `--select=<fi
 
 ## Testing with the built-in mic and speakers
 
-Planned for phase 3 (audio device layer). On macOS the built-in microphone and speakers are
-separate CoreAudio devices; the app will allow a separate input/output device pair for testing
-and label it "not sample-synchronized, for testing only". The Info.plist already contains
-`NSMicrophoneUsageDescription`, so macOS will ask for microphone access on first use.
+On macOS the built-in microphone and speakers are separate CoreAudio devices. Pick
+"MacBook Pro Speakers" as the output device and "MacBook Pro Microphone" as the input device in
+the AUDIO section; the app labels this pair "Not sample-synchronized, for testing only" because
+two devices run on independent clocks. Use one interface (e.g. the Apollo) for real work.
+
+Microphone access: macOS asks once. Until the prompt is answered the app does not open any
+audio device that has inputs (CoreAudio would block the app until then), so answer it first.
+If access is denied, playback and audition still work but every input is silent; allow Reamp
+Forge in System Settings > Privacy & Security > Microphone and restart the app. When the app is
+started from a terminal, macOS asks on behalf of the terminal app instead.
+
+Set the output level low before the first Audition: it plays the selected file's channel through
+the chosen output channel from the waveform's audition marker.
+
+### Development flags
+
+For one run only (nothing is saved): `--device=<name>` (input and output), `--output-device=`,
+`--input-device=`, `--device-type=`, `--sample-rate=`, `--buffer-size=`, `--output-channel=` and
+`--input-channel=` (1-based number or driver channel name), `--output-level=<dB>`, `--no-input`
+(output-only devices, no microphone prompt), `--virtual-device` (a silent software device, no
+hardware used) and `--audition-check[=seconds]` (auditions the selected file, prints progress to
+stderr, exits 0 on success). Example without touching any hardware:
+
+```sh
+"build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge" --virtual-device \
+    --open="$HOME/DI/Session A" --select="Riff 01.wav" --output-level=-30 --audition-check=2
+```
+
+See `Source/App/CommandLine.h` for details.
 
 ## Layout
 
@@ -99,13 +127,15 @@ and label it "not sample-synchronized, for testing only". The Info.plist already
 CMakeLists.txt
 Assets/Fonts/     JetBrains Mono + Inter (Regular/Medium/Bold) and their OFL licences
 Source/Main.cpp   application entry point
-Source/App/       main window, root component, Settings, command line, macOS appearance,
-                  snapshot aid
+Source/App/       main window, root component, Settings, AudioController, microphone
+                  permission, command line, macOS appearance, snapshot and virtual device aids
 Source/UI/        Theme (design tokens), Fonts, Format, LookAndFeel, TopBar, FileTreeView,
-                  Sidebar + sections, WaveformPanel, StatusBar
-Source/Engine/    (empty, phases 3-5)
+                  Sidebar + sections, Meters, WaveformPanel, StatusBar
+Source/Engine/    AudioDeviceInterface, JuceAudioDevice, DeviceSession, DuplexEngine,
+                  SourceLoader (more in phases 4-5)
 Source/Model/     FileItem, FileTree, FolderScanner
-Tests/            JUCE UnitTest runner and tests (FolderScanner, FileTree, FileTreeView)
+Tests/            JUCE UnitTest runner and tests (FolderScanner, FileTree, FileTreeView, Settings,
+                  DeviceSession, DuplexEngine, SourceLoader) and a fake audio device
 ```
 
 See `ARCHITECTURE.md` for the thread and data-flow design, `PROMPT.md` for the full

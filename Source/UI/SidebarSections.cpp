@@ -13,6 +13,8 @@ namespace rf::ui
         constexpr int readoutHeight  = 20;
         constexpr int toggleHeight   = 24;
         constexpr int hintHeight     = 34;
+        constexpr int noticeHeight   = 32;   // two lines
+        constexpr int meterHeight    = 18;
         constexpr int sliderTextBoxWidth = 72;
 
         juce::String emDash()   { return utf8 ("\xe2\x80\x94"); }
@@ -35,11 +37,27 @@ namespace rf::ui
 
     //==============================================================================
     AudioSection::AudioSection()
-        : SidebarSection ("Audio")
+        : SidebarSection ("Audio"),
+          splitNotice ("Not sample-synchronized, for testing only"),
+          peakReadout ("Peak at output", emDash())
     {
-        fillCombo (deviceBox,        { "No device" },  "Audio device used for playback and recording.");
-        fillCombo (outputChannelBox, { emDash() },       "Output channel that feeds the amp.");
-        fillCombo (inputChannelBox,  { emDash() },       "Input channel that records the amp.");
+        fillCombo (typeBox,          { "No driver" },  "Audio driver type (CoreAudio on macOS; ASIO or Windows Audio on Windows).");
+        fillCombo (outputDeviceBox,  { "No device" },  "Device whose output feeds the amp.");
+        fillCombo (inputDeviceBox,   { "No device" },  "Device whose input records the amp. Use the same device as the output "
+                                                        "for sample-accurate results.");
+        fillCombo (sampleRateBox,    { emDash() },     "Device sample rate.");
+        fillCombo (bufferSizeBox,    { emDash() },     "Device buffer size in samples.");
+        fillCombo (outputChannelBox, { emDash() },     "Output channel that feeds the amp.");
+        fillCombo (inputChannelBox,  { emDash() },     "Input channel that records the amp.");
+
+        splitNotice.setTooltip ("Input and output are different devices with independent clocks, so recordings "
+                                "cannot be sample-aligned. Fine for trying the app with the built-in mic and "
+                                "speakers; use one interface for real work.");
+
+        outputMeter.setTooltip ("Peak level sent to the output channel (dBFS). CLIP latches when full scale is "
+                                "reached; click the meter to reset it.");
+        inputMeter.setTooltip ("Peak level on the input channel (dBFS). CLIP latches when full scale is reached; "
+                               "click the meter to reset it.");
 
         outputLevel.setSliderStyle (juce::Slider::LinearHorizontal);
         outputLevel.setTextBoxStyle (juce::Slider::TextBoxRight, false, sliderTextBoxWidth, sliderHeight);
@@ -48,15 +66,39 @@ namespace rf::ui
         outputLevel.setDoubleClickReturnValue (true, 0.0);
         outputLevel.setTextValueSuffix (" dB");
         outputLevel.setNumDecimalPlacesToDisplay (1);
-        outputLevel.setTooltip ("Gain applied to every file on playback (-60 to +12 dB).");
+        outputLevel.setTooltip ("Gain applied to every file on playback (-60 to +12 dB). Double-click for 0 dB.");
+
+        peakReadout.setTooltip ("Peak of the selected file's played channel with the output level applied.");
 
         setButtonStyle (auditionButton, ButtonStyle::secondary);
-        auditionButton.setTooltip ("Play the selected file through the output without recording.");
+        auditionButton.setTooltip ("Play the selected file from the audition marker through the output channel, "
+                                   "without recording (Space).");
 
-        addRow ({ { "Device", &deviceBox } }, metric::controlHeight);
+        addRow ({ { "Driver", &typeBox } }, metric::controlHeight);
+        addRow ({ { "Output device", &outputDeviceBox } }, metric::controlHeight);
+        addRow ({ { "Input device", &inputDeviceBox } }, metric::controlHeight);
+        addRow ({ { {}, &splitNotice } }, noticeHeight);
+        addRow ({ { "Sample rate", &sampleRateBox }, { "Buffer", &bufferSizeBox } }, metric::controlHeight);
         addRow ({ { "Output", &outputChannelBox }, { "Input", &inputChannelBox } }, metric::controlHeight);
+        addRow ({ { {}, &outputMeter } }, meterHeight);
+        addRow ({ { {}, &inputMeter } }, meterHeight);
         addRow ({ { "Output level", &outputLevel } }, sliderHeight);
+        addRow ({ { {}, &peakReadout } }, readoutHeight);
         addRow ({ { {}, &auditionButton } }, metric::controlHeight);
+
+        setRowVisible (splitNotice, false);
+    }
+
+    void AudioSection::setSplitDevicesNoticeVisible (bool shouldShow)
+    {
+        setRowVisible (splitNotice, shouldShow);
+    }
+
+    void AudioSection::setAuditioning (bool isAuditioning)
+    {
+        auditionButton.setButtonText (isAuditioning ? "Stop" : "Audition");
+        setButtonStyle (auditionButton, isAuditioning ? ButtonStyle::primary : ButtonStyle::secondary);
+        auditionButton.repaint();
     }
 
     //==============================================================================

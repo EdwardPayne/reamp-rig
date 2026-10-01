@@ -28,6 +28,9 @@ Snapshot the UI without screen-recording permission:
 
 Add `--open=<file or folder>` (repeatable) to load files; `--select=`, `--audition-at=` and
 `--view=` set up the rest of the window for a snapshot (`Source/App/CommandLine.h`).
+Audio without hardware: `--virtual-device` (silent software device) and
+`--audition-check[=sec]`; `--device=`/`--output-device=`/`--output-level=` pick real devices
+for one run.
 
 Verify a phase by building **and launching**, not just compiling. Look at a snapshot.
 

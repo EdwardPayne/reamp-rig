@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "VirtualAudioDevice.h"
 #include "../UI/Format.h"
 #include "../UI/LookAndFeel.h"
 #include "../UI/Theme.h"
@@ -32,9 +33,19 @@ namespace rf::app
         }
     }
 
-    MainComponent::MainComponent (Settings& s)
+    MainComponent::MainComponent (Settings& s, bool useVirtualDevice)
         : settings (s)
     {
+        if (useVirtualDevice)
+            audioDevice = std::make_unique<VirtualAudioDevice>();
+        else
+            audioDevice = std::make_unique<engine::JuceAudioDevice>();
+
+        audio = std::make_unique<AudioController> (settings, *audioDevice,
+                                                   AudioController::Views { sidebar.getAudioSection(), sidebar.getSyncSection(),
+                                                                            topBar, statusBar, waveformPanel },
+                                                   ! useVirtualDevice);
+
         splitLayout.setItemLayout (1, metric::splitterSize, metric::splitterSize, metric::splitterSize);
 
         for (auto* c : std::initializer_list<juce::Component*> { &topBar, &fileTree, &splitter,
@@ -54,12 +65,33 @@ namespace rf::app
         fileModel.addListener (this);
         fileTreeChanged();
 
+        // Buttons must not keep keyboard focus after a click, so Space (audition) and the list
+        // shortcuts keep working; the list or this component receives the keys instead.
+        std::function<void (juce::Component&)> noButtonFocus = [&] (juce::Component& parent)
+        {
+            for (auto* child : parent.getChildren())
+            {
+                if (auto* button = dynamic_cast<juce::Button*> (child))
+                {
+                    button->setWantsKeyboardFocus (false);
+                    button->setMouseClickGrabsKeyboardFocus (false);
+                }
+
+                noButtonFocus (*child);
+            }
+        };
+
+        noButtonFocus (*this);
+        setWantsKeyboardFocus (true);
+
         setSize (1280, 800);
     }
 
     MainComponent::~MainComponent()
     {
         fileModel.removeListener (this);
+        audio = nullptr;          // detaches the callback first
+        audioDevice = nullptr;
     }
 
     //==============================================================================
@@ -125,9 +157,11 @@ namespace rf::app
             fileTree.focusList();
     }
 
-    void MainComponent::applyLaunchOptions (const LaunchOptions& options)
+    void MainComponent::applyLaunchOptions (const LaunchOptions& options, std::function<void (bool)> onAuditionCheckDone)
     {
-        auto apply = [this, options]
+        audio->openInitialDevice (options);
+
+        auto apply = [this, options, onAuditionCheckDone]
         {
             std::vector<model::ItemId> ids;
 
@@ -145,6 +179,9 @@ namespace rf::app
 
             if (options.auditionStart.has_value())
                 waveformPanel.setAuditionStart (*options.auditionStart);
+
+            if (options.auditionCheckSeconds.has_value())
+                audio->runAuditionCheck (*options.auditionCheckSeconds, onAuditionCheckDone);
         };
 
         if (options.openPaths.isEmpty())
@@ -155,7 +192,7 @@ namespace rf::app
 
     bool MainComponent::isBusy() const
     {
-        return scanner.getNumPending() > 0 || waveformPanel.isLoading();
+        return scanner.getNumPending() > 0 || waveformPanel.isLoading() || audio->isBusy();
     }
 
     void MainComponent::chooseFiles (bool folders)
@@ -183,10 +220,17 @@ namespace rf::app
         statusBar.setQueueText (format::fileCount (fileModel.countWithStatus (model::FileStatus::queued)) + " queued");
 
         if (const auto* lead = fileModel.find (fileModel.getLead()))
+        {
+            const auto channel = lead->hasChannelChoice() && lead->channel == model::Channel::right ? 1 : 0;
             waveformPanel.setSource (lead->file, lead->info.numChannels, lead->info.sampleRate,
-                                     lead->info.lengthInSamples, lead->channel == model::Channel::right ? 1 : 0);
+                                     lead->info.lengthInSamples, channel);
+            audio->setLead (lead->file, channel);
+        }
         else
+        {
             waveformPanel.clearSource();
+            audio->setLead ({}, 0);
+        }
     }
 
     //==============================================================================
@@ -215,6 +259,19 @@ namespace rf::app
             paths.add (juce::File (f));
 
         addPaths (paths);
+    }
+
+    //==============================================================================
+    bool MainComponent::keyPressed (const juce::KeyPress& key)
+    {
+        // Reaches here when the focused component (usually the file list) does not use the key.
+        if (key == juce::KeyPress::spaceKey)
+        {
+            audio->toggleAudition();
+            return true;
+        }
+
+        return false;
     }
 
     //==============================================================================
