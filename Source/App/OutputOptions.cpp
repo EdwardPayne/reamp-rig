@@ -1,11 +1,19 @@
 #include "OutputOptions.h"
 #include "../UI/Format.h"
+#include "../UI/LookAndFeel.h"
 #include "../UI/Theme.h"
 
 namespace rf::app
 {
     namespace
     {
+        /** "2", "0.5", "12.5" (tenths, no trailing ".0"). */
+        juce::String formatSeconds (double s)
+        {
+            const auto text = juce::String (s, 1);
+            return text.endsWith (".0") ? text.dropLastCharacters (2) : text;
+        }
+
         constexpr int bitDepths[] = { 16, 24, 32 };   // order of the format combo
         constexpr model::CollisionPolicy policies[] = { model::CollisionPolicy::autoNumber, model::CollisionPolicy::overwrite,
                                                          model::CollisionPolicy::skip };   // order of the collision combo
@@ -26,8 +34,10 @@ namespace rf::app
             b->onClick = nullptr;
 
         for (auto* e : { &destination.getSubfolderEditor(), &destination.getPrefixEditor(),
-                         &destination.getSuffixEditor(), &options.getTailEditor() })
+                         &destination.getSuffixEditor(), &options.getTailEditor(), &options.getPauseEditor() })
             e->onTextChange = nullptr;
+
+        options.getPauseEditor().onFocusLost = nullptr;
 
         destination.getFolderField().onClick = nullptr;
         destination.getFormatBox().onChange = nullptr;
@@ -58,6 +68,7 @@ namespace rf::app
 
         options.getChannelTagToggle().setToggleState (settings.getChannelTag(), juce::dontSendNotification);
         options.getTailEditor().setText (juce::String (settings.getTailMs()), false);
+        options.getPauseEditor().setText (formatSeconds (settings.getPauseBetweenFilesSeconds()), false);
     }
 
     void OutputOptions::wire()
@@ -135,6 +146,17 @@ namespace rf::app
         {
             settings.setTailMs (options.getTailEditor().getText().getIntValue());
         };
+
+        options.getPauseEditor().onTextChange = [this]
+        {
+            settings.setPauseBetweenFilesSeconds (options.getPauseEditor().getText().getDoubleValue());
+        };
+
+        // Show what was stored (clamped to 0..60 s, tenths) once the field is left.
+        options.getPauseEditor().onFocusLost = [this]
+        {
+            options.getPauseEditor().setText (formatSeconds (settings.getPauseBetweenFilesSeconds()), false);
+        };
     }
 
     void OutputOptions::chooseFolder()
@@ -168,6 +190,7 @@ namespace rf::app
 
     int OutputOptions::getBitsPerSample() const   { return settings.getBitDepth(); }
     int OutputOptions::getTailMs() const          { return settings.getTailMs(); }
+    double OutputOptions::getPauseBetweenSeconds() const   { return settings.getPauseBetweenFilesSeconds(); }
 
     void OutputOptions::setExampleSource (const juce::File& source, const juce::File& root, std::optional<model::Channel> channel)
     {
@@ -186,11 +209,14 @@ namespace rf::app
     void OutputOptions::setEnabled (bool enabled)
     {
         for (auto* c : std::initializer_list<juce::Component*> {
-                 &destination.getBesideSourceRadio(), &destination.getSingleFolderRadio(), &destination.getSubfolderEditor(),
-                 &destination.getFolderField(), &destination.getMirrorToggle(), &destination.getPrefixEditor(),
-                 &destination.getSuffixEditor(), &destination.getFormatBox(), &destination.getCollisionBox(),
-                 &options.getChannelTagToggle(), &options.getTailEditor(), &options.getIncludeSubfoldersToggle() })
+                 &destination.getBesideSourceRadio(), &destination.getSingleFolderRadio(), &destination.getFolderField(),
+                 &destination.getMirrorToggle(), &destination.getFormatBox(), &destination.getCollisionBox(),
+                 &options.getChannelTagToggle(), &options.getIncludeSubfoldersToggle() })
             c->setEnabled (enabled);
+
+        for (auto* e : { &destination.getSubfolderEditor(), &destination.getPrefixEditor(), &destination.getSuffixEditor(),
+                         &options.getTailEditor(), &options.getPauseEditor() })
+            ui::setTextEditorEnabled (*e, enabled);
     }
 
     void OutputOptions::refresh()

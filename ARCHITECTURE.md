@@ -1,6 +1,6 @@
 # Reamp Rig architecture
 
-Current through phase 5 (sync). Everything described here is implemented.
+Current through phase 6 (polish, version 0.1.0). Everything described here is implemented.
 
 ## Modules
 
@@ -198,6 +198,11 @@ a thread-safe state snapshot and receives change notifications on the message th
   Cancel). `--batch-check` counts as confirmed. The sidecar log's Latency header has one line per
   configuration (measured with value, confidence and date, or estimated) and every file entry says
   which latency it used.
+- **Forget** (phase 6): a secondary button beside Sync, enabled when the current configuration has
+  a measurement and nothing measures or records. It shows the themed `ui::ConfirmDialog` ("Forget
+  the sync measurement?", the key and value); confirmed, `Settings::removeSyncMeasurement` deletes
+  that key only. A device that stops during a measurement ends it at once
+  (`AudioController::onSyncDeviceStopped`): nothing is stored, the SYNC section shows the failure.
 - **Display** (`AudioController::refreshSyncUi`, after every device, rate or buffer change and after
   a measurement): the top-bar chip shows `1234 SMP · 25.7 MS` in `ok` when the current configuration
   has a measurement, `NOT SYNCED` in `warn` otherwise (`NO DEVICE` muted when closed); the SYNC
@@ -228,6 +233,33 @@ a thread-safe state snapshot and receives change notifications on the message th
   Resume (a re-amp cannot be resumed mid-file without a discontinuity). Skip marks it Skipped.
   Stop discards it and leaves it Queued. A device that stops pauses the batch. A file removed
   from the list during the batch is skipped.
+- **Pause between files (phase 6).** `pauseBetweenFilesSeconds` (OPTIONS, 0..60 s, default 2) is
+  read at Start. When a take finishes (`takeDone`), `settleUntilMs = now + pause`. `next()`
+  advances the queue; if the deadline is still ahead the BatchController enters `Phase::waiting`
+  and runs a `juce::Timer` (100 ms, message thread, never a sleep) that updates the status line
+  ("File 4 of 7 — next in 2 s — ETA 00:35") and calls `beginFile()` once the deadline has passed.
+  The upcoming file is highlighted as current meanwhile, the last take stays in the waveform
+  panel. Pause during the wait pauses before that file; Resume always waits the pause once more
+  (the interrupted take or a device that just came back may still ring). Skip during the wait
+  skips the upcoming file and keeps the deadline for the next one. Stop ends the batch. A sync
+  measurement cannot start while a batch is active; the timer checks `isSyncActive()` anyway
+  before recording. The first take of a batch starts at once.
+- **ETA** = audio still to record (remaining files + tail + latency each) divided by the pace
+  measured so far, **plus** the waits still to come: the rest of the current wait and one pause
+  per unfinished file after the current one (`BatchQueue::countUnfinishedAfterCurrent`). Paused
+  time and the waits are excluded from the pace, so nothing is counted twice.
+- **Write failures (phase 6).** `FileWriter` checks every `AudioFormatWriter::write` result and,
+  after closing the file, that the data actually landed on disk (size check: a full disk can
+  show only when the buffer is flushed); a refused write, a failed rename or an unwritable
+  destination sets `WriteResult/TakeResult::writeFailed` and deletes the temp file. The
+  BatchController then pauses the batch when the volume is full (free space below the file's size
+  + 1 MB) or the destination is the single output folder (every later file would fail too), with
+  a status-bar error that says what to do (free space and Resume; check the folder or Stop and
+  choose another). An unwritable subfolder next to one source only marks that file Error.
+- **NC redo.** The BatchController remembers the `SyncKey` of every NC take (session only, like
+  the list). "Redo files with warnings" (`getRedoableIds`) re-queues XR/SIL/CLIP files and NC
+  files whose key has a measurement by now; the file list asks it for the header button and the
+  context menu count, refreshed when a measurement is stored or forgotten.
 - Sidecar log (`BatchLog`): one plain-text file per batch, "Reamp Rig batch <date> <time>.txt",
   in the destination folder of the first file handled (the output folder itself in single-folder
   mode). Header: device, rate, buffer, channels, level, latency source, format, tail, naming,
@@ -280,6 +312,19 @@ a thread-safe state snapshot and receives change notifications on the message th
   notice, the top-bar summary (`Apollo Twin · 48 kHz · 256`, "No device" when closed), the sync
   chip and the SYNC readouts (stored measurement or "Not synced", phase 5) and the driver latency
   in the SYNC section.
+- **Device loss and reconnection (phase 6).** A device that stops or disappears (listener
+  notification, or the 2 s poll in the AudioController's timer as a fallback) stops audition,
+  pauses a running batch (`onDeviceStopped`; the take is discarded, the file stays queued) and
+  ends a running Sync (`onSyncDeviceStopped`), each with a status-bar message that says the
+  device reopens by itself. The controller keeps the *preferred* configuration: the saved one
+  at launch (or what a first launch opened) and every choice the user makes. On every device
+  list change and every 2 s, `DeviceSession::isPresent (preferred)` and
+  `DeviceSession::runs (status, preferred)` feed an `engine::ReconnectWatch`: when the preferred
+  devices were missing (unplugged, or absent at launch so a fallback opened) and are listed
+  again, the controller reopens them with `applyConfig (preferred, persist = false)`, unless a
+  batch is running (then it waits until the batch ends) or Sync measures. A paused batch says
+  "<device> is back. Press Resume" (`onDeviceReopened`); it never resumes by itself.
+  `LoopbackTestDevice::setPresent` simulates unplugging for `--virtual-unplug`.
 - **Microphone permission (macOS, `MicrophonePermission.mm`)**: `AVCaptureDevice`
   authorization status and a non-blocking request. Important finding: because JUCE's aggregate
   device carries *all* streams of its sub-devices, creating any CoreAudio device that has input
@@ -341,6 +386,17 @@ a thread-safe state snapshot and receives change notifications on the message th
   uses it too. All AUDIO controls are stock JUCE widgets drawn entirely by
   `ForgeLookAndFeel` (combos, popups, slider); `juce::AudioDeviceSelectorComponent` is not used.
 
+- Phase 6: the app icon (`Assets/Icon/make_icon.py` writes PNGs at 16-1024 px: black square,
+  the accent mark of the top-bar logo; `ICON_BIG`/`ICON_SMALL` in `juce_add_gui_app`, JUCE builds
+  `AppIcon.icns` and sets `CFBundleIconFile`). Tooltips on every control: JUCE's `ScrollBar` is
+  not a tooltip client, so the waveform scrollbar is a `TooltipScrollBar` and the list and
+  sidebar use `TooltipViewport`; `setSliderTooltip` also sets the slider's value box (JUCE
+  copies the tooltip only when the box is created). `setTextEditorEnabled` shows a locked text
+  field's text in `muted` (JUCE keeps the colour). Sidebar rows take fixed-width fields
+  (Sync | Forget). Collapsing a folder group deselects its files (`FileTree::deselect`), and
+  cmd-A selects the visible files only. The confirmation dialog swallows every key except
+  Return / Escape and command shortcuts (cmd-Q still quits).
+
 ## Model (phase 2, implemented)
 
 Namespace `rf::model`. No GUI and no audio-thread code; everything except `FolderScanner::scan`
@@ -372,8 +428,11 @@ is message-thread only.
   parent of the added folder, so adding "Session A" gives `<out>/Session A/Takes/...`), collision
   policies (overwrite, skip, auto-number `name (2).wav`), validation messages and the example
   line.
-- `FolderScanner`: `scan(inputs, recursive, formats, shouldAbort)` is synchronous and used by
-  the tests. `scanAsync(...)` runs it on the scanner's own single-thread `juce::ThreadPool`
+- `FolderScanner`: `scan(inputs, recursive, formats, shouldAbort, outputSubfolderName)` is
+  synchronous and used by the tests. While recursing, a subfolder named like the DESTINATION
+  subfolder (default "Reamped", case-insensitive where the file system is) is not entered and is
+  returned in `skippedOutputFolders` (status bar: "Skipped Reamped (output folder)"); a folder
+  added directly is always scanned. `scanAsync(...)` runs it on the scanner's own single-thread `juce::ThreadPool`
   ("Folder scanner") and posts the `ScanResult` to the message thread with
   `MessageManager::callAsync`; a shared `alive` flag drops results that arrive after the scanner
   is destroyed, and scans are delivered in the order queued. Supported formats are whatever
@@ -445,7 +504,15 @@ phase 4: `tailMs` (0..60000, default 0), `prefix` (""), `suffix` ("_reamp"), `de
 `outputFolder` (absolute path or empty), `mirrorStructure` (on), `channelTag` (off), `bitDepth`
 (16 / 24 default / 32 float), `collisionPolicy` (`autoNumber` default / `overwrite` / `skip`);
 phase 5: `syncLevelDb` (-60..0, default -12) and `syncMeasurements` (the keyed sync store, see
-"Sync measurement").
+"Sync measurement"); phase 6: `pauseBetweenFilesSeconds` (0..60 s in tenths, default 2) and
+`windowBounds` ("x y w h" of the window's outer frame, screen coordinates).
+
+**Window state (phase 6).** `MainWindow` saves its frame (content bounds plus the native title
+bar, `ComponentPeer::getFrameSizeIfPresent`) on every move and resize and when it closes, but not
+while full screen or minimised. On launch the saved frame goes through `clampWindowBounds`
+(pure, unit tested): the display it overlaps most (else the main display, centred), at least
+1100 x 700 content, at most the display's usable area, moved inside it with the title bar below
+the menu bar.
 `App/OutputOptions` binds the DESTINATION and OPTIONS controls to these keys (saved on every
 change). `--settings-file=<path>` points the app at another file (development checks).
 Hand-edited garbage falls back to safe values. The file list is never persisted.
@@ -458,7 +525,8 @@ console app (`ReampRigTests`) that runs every test or one category
 (`--category=<name>`) and exits non-zero on any failure. CMake registers one ctest entry per
 category (`FolderScanner`, `FileTree`, `FileTreeView`, `Settings`, `DeviceSession`,
 `DuplexEngine`, `SourceLoader`, `Resampler`, `Loopback`, `Take`, `OutputNaming`, `BatchQueue`,
-`Sync`). `Tests/LoopbackRig.h` holds the loopback device setup, test files and the take `Rig`
+`Sync`, `Keyboard`). `Keyboard` drives the confirmation dialog and the file list headlessly
+(keys in every state, collapsed groups via a synthetic mouse event). `Tests/LoopbackRig.h` holds the loopback device setup, test files and the take `Rig`
 shared by `Loopback` and `Sync`.
 `Loopback` is the end-to-end engine test (files on disk -> SourceLoader -> DuplexEngine ->
 LoopbackTestDevice -> RecordStream -> FileWriter -> file on disk, compared sample by sample). Device logic runs against `Tests/FakeAudioDevice.h`, a

@@ -30,6 +30,8 @@ namespace rf::app
         static constexpr auto channelTag        = "channelTag";
         static constexpr auto bitDepth          = "bitDepth";
         static constexpr auto collisionPolicy   = "collisionPolicy";
+        static constexpr auto pauseBetweenFiles = "pauseBetweenFilesSeconds";
+        static constexpr auto windowBounds      = "windowBounds";
 
         static constexpr auto syncLevelDb       = "syncLevelDb";
         static constexpr auto syncMeasurements  = "syncMeasurements";
@@ -328,6 +330,104 @@ namespace rf::app
         file->setValue (key::collisionPolicy, toKey (p));
     }
 
+    double Settings::getPauseBetweenFilesSeconds() const
+    {
+        const auto text = file->getValue (key::pauseBetweenFiles).trim();
+
+        if (text.isEmpty() || ! isNumber (text, true))
+            return defaultPauseBetweenFilesSeconds;
+
+        const auto seconds = text.getDoubleValue();
+        return std::isfinite (seconds) ? juce::jlimit (0.0, maxPauseBetweenFilesSeconds, std::round (seconds * 10.0) / 10.0)
+                                       : defaultPauseBetweenFilesSeconds;
+    }
+
+    void Settings::setPauseBetweenFilesSeconds (double seconds)
+    {
+        const auto clean = std::isfinite (seconds) ? juce::jlimit (0.0, maxPauseBetweenFilesSeconds, std::round (seconds * 10.0) / 10.0)
+                                                   : defaultPauseBetweenFilesSeconds;
+        file->setValue (key::pauseBetweenFiles, juce::String (clean, 1));
+    }
+
+    //==============================================================================
+    std::optional<juce::Rectangle<int>> Settings::getWindowBounds() const
+    {
+        // "x y width height" (integers; x and y may be negative on a display left of the main one)
+        const auto parts = juce::StringArray::fromTokens (file->getValue (key::windowBounds), " ", {});
+
+        if (parts.size() != 4)
+            return std::nullopt;
+
+        int values[4] {};
+
+        for (int i = 0; i < 4; ++i)
+        {
+            if (! isNumber (parts[i], false))
+                return std::nullopt;
+
+            const auto v = parts[i].getLargeIntValue();
+
+            if (v < -100000 || v > 100000)
+                return std::nullopt;
+
+            values[i] = (int) v;
+        }
+
+        if (values[2] <= 0 || values[3] <= 0)
+            return std::nullopt;
+
+        return juce::Rectangle<int> (values[0], values[1], values[2], values[3]);
+    }
+
+    void Settings::setWindowBounds (juce::Rectangle<int> r)
+    {
+        if (r.isEmpty())
+            return;
+
+        file->setValue (key::windowBounds, juce::String (r.getX()) + " " + juce::String (r.getY()) + " "
+                                               + juce::String (r.getWidth()) + " " + juce::String (r.getHeight()));
+    }
+
+    std::optional<juce::Rectangle<int>> clampWindowBounds (juce::Rectangle<int> saved,
+                                                           const juce::Array<juce::Rectangle<int>>& displays,
+                                                           juce::Point<int> minSize)
+    {
+        if (displays.isEmpty())
+            return std::nullopt;
+
+        // The display the window overlaps most, else the main (first) one.
+        auto target = displays.getFirst();
+        auto best = 0;
+
+        for (const auto& d : displays)
+        {
+            const auto overlap = d.getIntersection (saved);
+            const auto area = overlap.getWidth() * overlap.getHeight();
+
+            if (area > best)
+            {
+                best = area;
+                target = d;
+            }
+        }
+
+        // At least the minimum, at most the display (a display smaller than the minimum gets
+        // the minimum; the window then overhangs, which macOS allows).
+        const auto w = juce::jmax (minSize.x, juce::jmin (saved.getWidth(), target.getWidth()));
+        const auto h = juce::jmax (minSize.y, juce::jmin (saved.getHeight(), target.getHeight()));
+
+        auto r = saved.withSize (w, h);
+
+        if (best == 0)
+            r = r.withCentre (target.getCentre());
+
+        // Keep it inside the display where possible (the top edge always: the title bar must
+        // stay reachable).
+        r.setX (juce::jlimit (target.getX(), juce::jmax (target.getX(), target.getRight() - w), r.getX()));
+        r.setY (juce::jlimit (target.getY(), juce::jmax (target.getY(), target.getBottom() - h), r.getY()));
+        return r;
+    }
+
     //==============================================================================
     float Settings::getSyncLevelDb() const
     {
@@ -389,6 +489,24 @@ namespace rf::app
         else
             entries.emplace_back (k, m);
 
+        writeSyncMeasurements (entries);
+    }
+
+    bool Settings::removeSyncMeasurement (const engine::SyncKey& k)
+    {
+        auto entries = getSyncMeasurements();
+        const auto before = entries.size();
+        entries.erase (std::remove_if (entries.begin(), entries.end(), [&] (const auto& p) { return p.first == k; }), entries.end());
+
+        if (entries.size() == before)
+            return false;
+
+        writeSyncMeasurements (entries);
+        return true;
+    }
+
+    void Settings::writeSyncMeasurements (const std::vector<std::pair<engine::SyncKey, engine::SyncMeasurement>>& entries)
+    {
         juce::XmlElement root (sync::root);
 
         for (const auto& [key, value] : entries)

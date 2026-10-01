@@ -35,6 +35,12 @@ namespace rf::app
 
     namespace
     {
+        juce::String explainOutputFolders (const juce::StringArray& paths)
+        {
+            return "Folders named like the DESTINATION subfolder hold results, so they are never scanned as "
+                   "sources:\n" + paths.joinIntoString ("\n");
+        }
+
         /** The development device (--virtual-device): the loopback test device, paced in real
             time, silent unless --virtual-loopback cables its output back to its input. */
         std::unique_ptr<engine::AudioDeviceInterface> makeVirtualDevice (const LaunchOptions& launch)
@@ -82,12 +88,25 @@ namespace rf::app
                                                    ! useVirtualDevice);
 
         sync = std::make_unique<SyncController> (settings, *audio,
-                                                 SyncController::Views { sidebar.getSyncSection(), topBar, statusBar });
+                                                 SyncController::Views { sidebar.getSyncSection(), topBar, statusBar,
+                                                                         confirmDialog });
 
         outputOptions = std::make_unique<OutputOptions> (settings, sidebar.getDestinationSection(), sidebar.getOptionsSection());
         batch = std::make_unique<BatchController> (*audio, fileModel, *outputOptions,
                                                    BatchController::Views { topBar, statusBar, waveformPanel, fileTree, confirmDialog });
         batch->onFinished = [this] { fileTreeChanged(); };
+
+        // "Redo files with warnings" includes NC files once their configuration is synced, so
+        // the header button follows the sync store as well as the list.
+        fileTree.getRedoableIds = [this] { return batch != nullptr ? batch->getRedoableIds() : std::vector<model::ItemId>(); };
+        sync->onStoreChanged = [this] { fileTree.refreshRedoButton(); };
+        audio->onSyncUiRefreshed = [this]
+        {
+            fileTree.refreshRedoButton();
+
+            if (sync != nullptr)
+                sync->refreshControls();
+        };
 
         splitLayout.setItemLayout (1, metric::splitterSize, metric::splitterSize, metric::splitterSize);
 
@@ -135,6 +154,8 @@ namespace rf::app
     MainComponent::~MainComponent()
     {
         fileModel.removeListener (this);
+        fileTree.getRedoableIds = nullptr;
+        audio->onSyncUiRefreshed = nullptr;
         batch = nullptr;          // cancels a running take while the engine still exists
         sync = nullptr;           // cancels a running measurement likewise
         outputOptions = nullptr;
@@ -153,6 +174,8 @@ namespace rf::app
 
         juce::Component::SafePointer<MainComponent> safeThis (this);
 
+        // Results "next to the source" live in the DESTINATION subfolder (default "Reamped");
+        // a recursive scan never picks them up as sources.
         scanner.scanAsync (paths, settings.getIncludeSubfolders(),
                            [safeThis, done = std::move (onAdded)] (model::ScanResult result)
         {
@@ -163,7 +186,8 @@ namespace rf::app
 
             if (done != nullptr)
                 done();
-        });
+        },
+                           settings.getSubfolderName());
     }
 
     void MainComponent::handleScanResult (const model::ScanResult& result)
@@ -178,6 +202,20 @@ namespace rf::app
         if (added.duplicates > 0)
             parts.add (juce::String (added.duplicates) + " already in the list");
 
+        juce::StringArray outputFolders;
+
+        for (const auto& f : result.skippedOutputFolders)
+        {
+            outputFolders.add (f.getFullPathName());
+            juce::Logger::writeToLog ("Skipped " + f.getFullPathName() + " (output folder)");
+        }
+
+        if (outputFolders.size() == 1)
+            parts.add ("Skipped " + result.skippedOutputFolders.front().getFileName() + " (output folder)");
+        else if (outputFolders.size() > 1)
+            parts.add ("Skipped " + juce::String (outputFolders.size()) + " output folders ("
+                       + result.skippedOutputFolders.front().getFileName() + ")");
+
         if (! result.skipped.empty())
         {
             parts.add (describeSkipped (result.skipped));
@@ -190,15 +228,21 @@ namespace rf::app
                 juce::Logger::writeToLog ("Skipped " + detail[detail.size() - 1]);
             }
 
+            for (const auto& f : outputFolders)
+                detail.add (f + ": output folder, never scanned as a source");
+
             statusBar.setMessage (parts.joinIntoString (". "), Tone::warning, detail.joinIntoString ("\n"));
         }
-        else if (parts.isEmpty())
+        else if (added.added == 0 && added.duplicates == 0)
         {
-            statusBar.setMessage ("No audio files found", Tone::warning);
+            statusBar.setMessage (parts.isEmpty() ? juce::String ("No audio files found")
+                                                  : "No audio files found. " + parts.joinIntoString (". "),
+                                  Tone::warning, outputFolders.isEmpty() ? juce::String() : explainOutputFolders (outputFolders));
         }
         else
         {
-            statusBar.setMessage (parts.joinIntoString (". "));
+            statusBar.setMessage (parts.joinIntoString (". "), Tone::normal,
+                                  outputFolders.isEmpty() ? juce::String() : explainOutputFolders (outputFolders));
         }
 
         if (scanner.getNumPending() == 0 && added.added > 0)
@@ -283,7 +327,36 @@ namespace rf::app
 
             if (options.pressStart)
                 batch->start();
+
+            if (options.pressForget)
+                sync->forget();
         };
+
+        // --virtual-unplug=<at>:<for>: the virtual interface disappears <at> seconds after
+        // launch and comes back <for> seconds later (reconnection check).
+        if (auto* loop = dynamic_cast<engine::LoopbackTestDevice*> (audioDevice.get()); loop != nullptr && options.virtualUnplug.has_value())
+        {
+            const auto [at, duration] = *options.virtualUnplug;
+            juce::Component::SafePointer<MainComponent> safe (this);
+
+            juce::Timer::callAfterDelay ((int) (at * 1000.0), [safe, loop]
+            {
+                if (safe != nullptr)
+                {
+                    juce::Logger::writeToLog ("[virtual-unplug] interface unplugged");
+                    loop->setPresent (false);
+                }
+            });
+
+            juce::Timer::callAfterDelay ((int) ((at + duration) * 1000.0), [safe, loop]
+            {
+                if (safe != nullptr)
+                {
+                    juce::Logger::writeToLog ("[virtual-unplug] interface plugged back in");
+                    loop->setPresent (true);
+                }
+            });
+        }
 
         if (options.openPaths.isEmpty())
             apply();

@@ -121,6 +121,29 @@ namespace rf::test
                 expectEquals (tree.getNumSelected(), 5);
             }
 
+            beginTest ("deselect (a collapsed group): only those files leave the selection, the lead stays");
+            {
+                tree.setChannel ({ idOf ("stereo1.wav") }, Channel::left);
+                tree.selectAll();
+                const auto lead = tree.getLead();
+                const auto before = listener.calls;
+
+                expectEquals (tree.deselect ({ idOf ("stereo1.wav"), idOf ("stereo2.wav") }), 2);
+                expectEquals (tree.getNumSelected(), 3);
+                expect (! tree.isSelected (idOf ("stereo1.wav")) && ! tree.isSelected (idOf ("stereo2.wav")));
+                expectEquals ((int) tree.getLead(), (int) lead);
+                expectEquals (listener.calls, before + 1);
+
+                // Nothing selected among them: no change, no notification.
+                expectEquals (tree.deselect ({ idOf ("stereo1.wav"), 999999 }), 0);
+                expectEquals (listener.calls, before + 1);
+
+                // Bulk actions now leave the deselected (hidden) files alone.
+                tree.setChannelOfSelection (Channel::right);
+                expect (channelOf ("stereo1.wav") == Channel::left);
+                tree.setChannelOfSelection (Channel::left);
+            }
+
             beginTest ("status reset and removal of the selection");
             {
                 expect (tree.setStatus (idOf ("stereo2.wav"), FileStatus::done, 1.0));

@@ -100,6 +100,19 @@ namespace rf::app
                 options.settingsFile = resolve (cwd, value);
             else if (arg == "--press-start")
                 options.pressStart = true;
+            else if (arg == "--press-forget")
+                options.pressForget = true;
+            else if (optionValue (arg, "virtual-unplug", value) && value.containsChar (':'))
+                options.virtualUnplug = std::make_pair (juce::jmax (0.0, value.upToFirstOccurrenceOf (":", false, false).getDoubleValue()),
+                                                        juce::jmax (0.0, value.fromFirstOccurrenceOf (":", false, false).getDoubleValue()));
+            else if (optionValue (arg, "window-bounds", value))
+            {
+                const auto parts = juce::StringArray::fromTokens (value, ",", {});
+
+                if (parts.size() == 4)
+                    options.windowBounds = juce::Rectangle<int> (parts[0].getIntValue(), parts[1].getIntValue(),
+                                                                 parts[2].getIntValue(), parts[3].getIntValue());
+            }
             else if (arg == "--audition-check")
                 options.auditionCheckSeconds = 2.0;
             else if (optionValue (arg, "audition-check", value))

@@ -46,11 +46,20 @@ namespace rf::app
         - Pause discards the current take and redoes that file from its start on Resume; Skip
           marks it Skipped; Stop discards it and leaves it Queued. A device that stops pauses
           the batch. At the end the device's original sample rate is restored.
+        - Pause between files (phase 6, OPTIONS, default 2 s): after a take the next one starts
+          only when that much time has passed (a message-thread timer, never a sleep), so amp
+          and reverb tails die out; the status line counts down ("File 4 of 7 — next in 2 s"),
+          Pause / Skip / Stop work during the wait, Resume waits once more, and the ETA counts
+          the waits still to come.
+        - A file that cannot be written (disk full, or an unwritable single output folder)
+          pauses the batch with the reason and what to do; an unwritable subfolder next to one
+          source marks only that file Error.
 
         It drives the engine only through AudioController and engine::Take.
     */
     class BatchController final : private model::FileTree::Listener,
-                                  private juce::AsyncUpdater
+                                  private juce::AsyncUpdater,
+                                  private juce::Timer
     {
     public:
         struct Views
@@ -72,8 +81,12 @@ namespace rf::app
         void skipCurrent();
         void stop();
 
-        /** Queues again every Done file with a dropout, silence or clipping warning. */
+        /** Queues again every Done file with a dropout, silence or clipping warning, and every
+            NC file whose device configuration has a sync measurement by now. */
         void redoFilesWithWarnings();
+
+        /** The files "Redo files with warnings" would queue again. */
+        std::vector<model::ItemId> getRedoableIds() const;
 
         bool isActive() const noexcept                  { return queue.isActive(); }
         model::ItemId getCurrentItem() const noexcept   { return currentId; }
@@ -98,12 +111,18 @@ namespace rf::app
         bool isWaitingForSnapshot() const;
 
     private:
-        enum class Phase { idle, loading, recording, paused };
+        enum class Phase { idle, waiting, loading, recording, paused };
 
         void fileTreeChanged() override;
         void handleAsyncUpdate() override;
+        void timerCallback() override;
 
         void next();
+        void startWaiting();
+        void endWaiting();
+        double getRemainingWaitSeconds() const;
+        double getEtaSeconds (double currentElapsedAudio, double extraPerFile) const;
+        bool handleWriteFailure (const juce::String& error, const juce::File& output);
         void beginFile();
         void loaded (const engine::LoadRequest&, std::shared_ptr<const engine::LoadedSource>, const juce::String& error);
         void startTake (std::shared_ptr<const engine::LoadedSource>);
@@ -112,7 +131,7 @@ namespace rf::app
                          const juce::StringArray& details = {});
         void preloadNext();
         void cancelCurrent();
-        void pauseBecause (const juce::String& message, ui::StatusBar::Tone);
+        void pauseBecause (const juce::String& message, ui::StatusBar::Tone, const juce::String& detail = {});
         void finishBatch (bool stopped);
         void handleSnapshot (const engine::EngineSnapshot&);
         void updateStatusLine();
@@ -160,6 +179,10 @@ namespace rf::app
         BatchLog log;
         bool logTried = false;
         double startedMs = 0.0, pausedSinceMs = 0.0, pausedTotalMs = 0.0;
+        double pauseBetweenSeconds = 0.0;   // OPTIONS "Pause between files", read at Start
+        double settleUntilMs = 0.0;         // the next take starts no earlier than this
+        double waitStartedMs = 0.0, waitedTotalMs = 0.0;
+        std::map<model::ItemId, engine::SyncKey> notCalibratedKeys;   // NC takes: their configuration
         double processedSeconds = 0.0;      // audio of the files finished so far
         int numDone = 0, numSkipped = 0, numErrors = 0, numWithWarnings = 0;
 
@@ -172,6 +195,7 @@ namespace rf::app
         };
 
         Check check;
+        double checkWaitStartMs = 0.0;
         bool checkTransport = false;
         int transportStage = 0;
         double resumeAtMs = 0.0;

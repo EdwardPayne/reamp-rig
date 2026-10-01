@@ -96,6 +96,13 @@ namespace rf::engine
 
         bool isRunning() const noexcept               { return running; }
 
+        /** Simulates unplugging (false) and plugging the interface back in (true), message
+            thread: unplugged, the stream stops, the device is not listed, open() fails and the
+            status says "device disconnected"; listeners are told either way. For the
+            reconnection checks (--virtual-unplug). */
+        void setPresent (bool shouldBePresent);
+        bool isPresent() const noexcept               { return present; }
+
     private:
         void run() override;
         void startStream();
@@ -106,6 +113,7 @@ namespace rf::engine
         DeviceStatus status;
         DuplexCallback* callback = nullptr;
         bool running = false;
+        bool present = true;
 
         // Preallocated in open(); used by the thread that renders.
         juce::AudioBuffer<float> inputs, outputs;

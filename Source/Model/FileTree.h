@@ -80,6 +80,11 @@ namespace rf::model
         void selectAll();
         void clearSelection();
 
+        /** Removes `ids` from the selection (the lead stays the lead). Returns how many were
+            selected. Used when a folder group is collapsed: hidden rows are never part of a
+            bulk action (decision 2026-10-01). */
+        int deselect (const std::vector<ItemId>& ids);
+
         //==============================================================================
         // Edits. Each returns the number of items actually changed.
 

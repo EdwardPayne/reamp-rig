@@ -37,6 +37,7 @@ namespace rf::engine
         juce::int64 droppedSamples = 0;     // record FIFO overflow
         int callbackGaps = 0;
         juce::int64 paddedSamples = 0;
+        bool writeFailed = false;           // the destination refused the file (see WriteResult)
 
         bool hadDropout() const noexcept    { return droppedSamples > 0 || callbackGaps > 0 || paddedSamples > 0; }
     };

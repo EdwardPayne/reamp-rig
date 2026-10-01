@@ -18,6 +18,7 @@ namespace rf::engine
         std::unique_ptr<ResamplerStream> resampler;
         juce::int64 discarded = 0;
         float peak = 0.0f;
+        bool writeFailed = false;       // a write was refused (disk full, volume gone)
     };
 
     FileWriter::FileWriter()
@@ -150,16 +151,25 @@ namespace rf::engine
         const auto range = juce::FloatVectorOperations::findMinAndMax (data, n);
         work->peak = juce::jmax (work->peak, -range.getStart(), range.getEnd());
 
-        if (job.bitsPerSample == 32)
+        // Once the file system refuses data (disk full), nothing more is written; the take
+        // still drains its FIFO so the engine is never blocked, and finish() reports it.
+        if (! work->writeFailed)
         {
-            const float* channels[] = { data, nullptr };
-            writer->write (reinterpret_cast<const int**> (channels), n);
-        }
-        else
-        {
-            floatToPcm (data, work->pcm.data(), n, job.bitsPerSample);
-            const int* channels[] = { work->pcm.data(), nullptr };
-            writer->write (channels, n);
+            auto ok = true;
+
+            if (job.bitsPerSample == 32)
+            {
+                const float* channels[] = { data, nullptr };
+                ok = writer->write (reinterpret_cast<const int**> (channels), n);
+            }
+            else
+            {
+                floatToPcm (data, work->pcm.data(), n, job.bitsPerSample);
+                const int* channels[] = { work->pcm.data(), nullptr };
+                ok = writer->write (channels, n);
+            }
+
+            work->writeFailed = ! ok;
         }
 
         if (job.onWritten != nullptr)
@@ -258,13 +268,26 @@ namespace rf::engine
         writer->flush();
         writer.reset();   // closes the stream and finalises the header
 
-        if (job.file.exists() && ! job.replaceExisting)
+        // A full disk may only show when the stream's buffer is flushed on close, so the size
+        // of what landed on disk is checked too (the data alone, without the WAV header).
+        const auto expectedDataBytes = r.samplesWritten * (job.bitsPerSample / 8);
+
+        if (w.writeFailed || tempFile.getSize() < expectedDataBytes)
+        {
+            tempFile.deleteFile();
+            r.writeFailed = true;
+            r.error = "could not write " + job.file.getFileName() + " to " + job.file.getParentDirectory().getFullPathName()
+                    + (job.file.getParentDirectory().getBytesFreeOnVolume() < expectedDataBytes + 65536
+                           ? juce::String (" (the disk is full)") : juce::String (" (the file system refused the data)"));
+        }
+        else if (job.file.exists() && ! job.replaceExisting)
         {
             r.error = job.file.getFileName() + " appeared while recording; the take was kept as "
                     + tempFile.getFileName();
         }
         else if (! tempFile.moveFileTo (job.file))
         {
+            r.writeFailed = true;
             r.error = "could not rename " + tempFile.getFileName() + " to " + job.file.getFileName();
         }
         else

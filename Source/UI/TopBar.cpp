@@ -61,9 +61,10 @@ namespace rf::ui
         startTooltip = "Process every queued file from top to bottom. Without a sync measurement for the device "
                        "configuration (top-bar chip), Start asks before using the driver's latency estimate.";
         startButton.setTooltip (startTooltip);
-        pauseButton.setTooltip ("Pause now: the current take is discarded and that file is recorded again "
-                                "from its start when you resume.");
-        skipButton.setTooltip ("Skip the current file (marked Skipped) and continue with the next.");
+        pauseButton.setTooltip ("Pause now: the current take is discarded and that file is recorded again from its "
+                                "start on Resume, after the pause between files.");
+        skipButton.setTooltip ("Skip the current file (marked Skipped) and continue with the next. During the pause "
+                               "between files it skips the file about to start.");
         stopButton.setTooltip ("Stop the batch. The current take is discarded and its file stays queued.");
 
         startButton.onClick = [this] { if (onStart != nullptr)       onStart(); };

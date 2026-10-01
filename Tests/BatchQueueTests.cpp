@@ -197,6 +197,33 @@ namespace rf::test
                 q.advance();
                 expectWithinAbsoluteError (q.getRemainingSeconds (0.1, 0.0), 5.9, 1.0e-9);
             }
+
+            beginTest ("pauses still to come: one per unfinished entry after the current one");
+            {
+                BatchQueue q;
+                q.start (tree);
+                const auto total = q.getTotal();
+                expectEquals (q.countUnfinishedAfterCurrent(), total);       // before the first advance: all
+
+                q.advance();
+                expectEquals (q.countUnfinishedAfterCurrent(), total - 1);   // the first file waits for nothing
+
+                q.finishCurrent (FileStatus::done);
+                q.advance();
+                expectEquals (q.countUnfinishedAfterCurrent(), total - 2);
+
+                q.pause();                                                    // the current entry stays current
+                expectEquals (q.countUnfinishedAfterCurrent(), total - 2);
+                q.resume();
+
+                while (q.getCurrent() != 0)
+                {
+                    q.finishCurrent (FileStatus::skipped);
+                    q.advance();
+                }
+
+                expectEquals (q.countUnfinishedAfterCurrent(), 0);
+            }
         }
     };
 

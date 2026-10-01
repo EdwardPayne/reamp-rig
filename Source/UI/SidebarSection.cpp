@@ -129,11 +129,21 @@ namespace rf::ui
             area.removeFromTop (rowGap);
 
             const auto numFields = (int) row.fields.size();
-            const auto fieldWidth = (rowArea.getWidth() - (numFields - 1) * metric::grid) / numFields;
+            auto fixedWidth = 0, numShared = 0;
+
+            for (const auto& f : row.fields)
+            {
+                fixedWidth += f.width;
+                numShared += f.width > 0 ? 0 : 1;
+            }
+
+            const auto sharedWidth = numShared == 0 ? 0
+                                   : (rowArea.getWidth() - fixedWidth - (numFields - 1) * metric::grid) / numShared;
 
             for (int i = 0; i < numFields; ++i)
             {
-                auto fieldArea = i == numFields - 1 ? rowArea : rowArea.removeFromLeft (fieldWidth);
+                const auto width = row.fields[(size_t) i].width > 0 ? row.fields[(size_t) i].width : sharedWidth;
+                auto fieldArea = i == numFields - 1 ? rowArea : rowArea.removeFromLeft (width);
                 rowArea.removeFromLeft (metric::grid);
 
                 if (row.hasLabels())

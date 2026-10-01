@@ -10,7 +10,8 @@ namespace rf::ui
         shadow and nothing JUCE-styled leaks through). It covers the whole window with a dimmed
         backdrop that swallows clicks, and shows a sharp-cornered panel with a warning badge
         and title, a line of text, a boxed list (e.g. the device configurations without a sync
-        measurement), a note, and two buttons. Escape cancels, Return confirms.
+        measurement), a note, and two buttons. Escape cancels, Return confirms; every other key
+        is swallowed (command shortcuts such as cmd-Q pass on to the application).
 
         The owner adds it as the topmost child, keeps it sized to the whole window, and calls
         show(); the callback receives true for the confirm button.

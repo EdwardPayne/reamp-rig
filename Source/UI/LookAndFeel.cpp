@@ -3,6 +3,15 @@
 
 namespace rf::ui
 {
+    void setSliderTooltip (juce::Slider& slider, const juce::String& text)
+    {
+        slider.setTooltip (text);
+
+        for (auto* child : slider.getChildren())
+            if (auto* label = dynamic_cast<juce::Label*> (child))
+                label->setTooltip (text);
+    }
+
     namespace colour = theme::colour;
 
     namespace
@@ -93,6 +102,14 @@ namespace rf::ui
         editor.setBorder (juce::BorderSize<int> (0));
         editor.setIndents (theme::metric::grid, 0);
         editor.setJustification (juce::Justification::centredLeft);
+    }
+
+    void setTextEditorEnabled (juce::TextEditor& editor, bool enabled)
+    {
+        editor.setEnabled (enabled);
+        const auto c = enabled ? editor.getLookAndFeel().findColour (juce::TextEditor::textColourId) : colour::muted;
+        editor.setColour (juce::TextEditor::textColourId, c);
+        editor.applyColourToAllText (c);
     }
 
     void drawSectionLabel (juce::Graphics& g, const juce::String& text, juce::Rectangle<int> area,

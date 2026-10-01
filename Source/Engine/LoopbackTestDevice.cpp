@@ -55,7 +55,24 @@ namespace rf::engine
 
     juce::StringArray LoopbackTestDevice::getDeviceNames (const juce::String& type, bool)
     {
-        return type == options.typeName ? juce::StringArray (options.deviceName) : juce::StringArray();
+        return type == options.typeName && present ? juce::StringArray (options.deviceName) : juce::StringArray();
+    }
+
+    void LoopbackTestDevice::setPresent (bool shouldBePresent)
+    {
+        if (present == shouldBePresent)
+            return;
+
+        present = shouldBePresent;
+
+        if (! present && status.isOpen)
+        {
+            stopStream();
+            status = {};
+            status.lastError = "device disconnected";
+        }
+
+        notifyListeners();
     }
 
     juce::String LoopbackTestDevice::getDefaultDeviceName (const juce::String& type, bool)
@@ -67,7 +84,7 @@ namespace rf::engine
     {
         stopStream();
 
-        if (config.typeName != options.typeName
+        if (! present || config.typeName != options.typeName
             || (config.outputDevice != options.deviceName && config.inputDevice != options.deviceName))
             return "No such device";
 

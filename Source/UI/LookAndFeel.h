@@ -18,6 +18,10 @@ namespace rf::ui
     /** Applies the standard mono control font and padding to a text editor. */
     void styleTextEditor (juce::TextEditor&);
 
+    /** Enables or disables a text editor and shows its text in `muted` while disabled (JUCE
+        keeps the text colour, so a locked field would otherwise look editable). */
+    void setTextEditorEnabled (juce::TextEditor&, bool enabled);
+
     /** Draws a small uppercase, letter-spaced mono section label. */
     void drawSectionLabel (juce::Graphics&, const juce::String& text, juce::Rectangle<int> area,
                            juce::Justification = juce::Justification::centredLeft);
@@ -31,6 +35,38 @@ namespace rf::ui
     /** A filled square with a black glyph in it (e.g. "!"), used next to warnings and errors so
         they are not signalled by colour alone. */
     void drawBadge (juce::Graphics&, juce::Rectangle<float> area, const juce::String& glyph, juce::Colour fill);
+
+    /** Sets a slider's tooltip on the slider and on its value box (JUCE copies the tooltip to
+        the text box only when the box is created, so a tooltip set later would be missing
+        there). */
+    void setSliderTooltip (juce::Slider&, const juce::String&);
+
+    //==============================================================================
+    /** A scrollbar with a tooltip (juce::ScrollBar is not a tooltip client). */
+    class TooltipScrollBar final : public juce::ScrollBar,
+                                   public juce::SettableTooltipClient
+    {
+    public:
+        using juce::ScrollBar::ScrollBar;
+    };
+
+    /** A Viewport whose scrollbars are TooltipScrollBars carrying `tooltip`. */
+    class TooltipViewport final : public juce::Viewport
+    {
+    public:
+        explicit TooltipViewport (juce::String tip) : tooltip (std::move (tip))   { recreateScrollbars(); }
+
+    protected:
+        juce::ScrollBar* createScrollBarComponent (bool isVertical) override
+        {
+            auto* bar = new TooltipScrollBar (isVertical);
+            bar->setTooltip (tooltip);
+            return bar;
+        }
+
+    private:
+        juce::String tooltip;
+    };
 
     //==============================================================================
     /*  The app-wide LookAndFeel: terminal-inspired, black, sharp-cornered, 1 px borders,

@@ -7,79 +7,194 @@ Phases are defined in `PROMPT.md` section 8; requirements are numbered per `PROM
 
 | Phase | Scope | Status | Verified | Snapshot |
 |---|---|---|---|---|
-| 1 | Skeleton + theme | **Done** | 2026-09-30, clean Release build, launched, window captured | `docs/phase1.png` |
-| 2 | Files + waveform | **Done** | 2026-09-30, clean Release build, 3/3 ctest entries pass, launched with `--open`, snapshots checked | `docs/phase2.png`, `docs/phase2-zoom.png` |
-| 3 | Audio device layer | **Done** | 2026-09-30, clean Release build, 7/7 ctest entries pass (59 cases, 323 checks), launched on real CoreAudio devices, `--audition-check` passed on the virtual device, snapshots checked | `docs/phase3.png`, `docs/phase3-audition.png` |
-| 4 | Engine + batch | **Done** | 2026-10-01, clean Release build, 12/12 ctest entries pass (164 cases, 1095 checks), `--batch-check` passed on the virtual loopback device (rate switching, forced resampling, pause/resume/skip/stop), outputs compared with a script, a quiet real-hardware batch passed, launched on real CoreAudio devices, snapshot checked | `docs/phase4.png` |
-| 5 | Sync | **Done** | 2026-10-01, clean Release build, 13/13 ctest entries pass (196 cases, 1382 checks), `--sync-check` exact on the virtual loopback at delays 37/300/1500, sync then `--batch-check` in one process: 7/7 Done without NC and bit-exact against a deliberately wrong driver estimate, acoustic sync on the built-in speakers + mic passed (medium confidence), launched on real CoreAudio devices, snapshots checked | `docs/phase5.png`, `docs/phase5-dialog.png` |
-| 6 | Polish | Not started | | |
+| 1 | Skeleton + theme | **Done** | 2026-09-30, clean Release build, launched, window captured | `docs/phase1.png` (removed in phase 6; see `docs/phase6-empty.png`) |
+| 2 | Files + waveform | **Done** | 2026-09-30, clean Release build, 3/3 ctest entries pass, launched with `--open`, snapshots checked | removed in phase 6; see `docs/phase6-files.png`, `docs/phase6-zoom.png` |
+| 3 | Audio device layer | **Done** | 2026-09-30, clean Release build, 7/7 ctest entries pass (59 cases, 323 checks), launched on real CoreAudio devices, `--audition-check` passed on the virtual device, snapshots checked | removed in phase 6; see `docs/phase6-audio.png`, `docs/phase6-audition.png` |
+| 4 | Engine + batch | **Done** | 2026-10-01, clean Release build, 12/12 ctest entries pass (164 cases, 1095 checks), `--batch-check` passed on the virtual loopback device (rate switching, forced resampling, pause/resume/skip/stop), outputs compared with a script, a quiet real-hardware batch passed, launched on real CoreAudio devices, snapshot checked | removed in phase 6; see `docs/phase6-batch.png` |
+| 5 | Sync | **Done** | 2026-10-01, clean Release build, 13/13 ctest entries pass (196 cases, 1382 checks), `--sync-check` exact on the virtual loopback at delays 37/300/1500, sync then `--batch-check` in one process: 7/7 Done without NC and bit-exact against a deliberately wrong driver estimate, acoustic sync on the built-in speakers + mic passed (medium confidence), launched on real CoreAudio devices, snapshots checked | removed in phase 6; see `docs/phase6-sync.png`, `docs/phase6-dialog.png` |
+| 6 | Polish | **Done** | 2026-10-01, clean Release build (no warnings from our code), 14/14 ctest entries pass (214 cases, 1528 checks), `--batch-check` with a 1 s pause on the virtual loopback (waits and ETA shown, 7/7 exact), unplug/replug, disk-full and unwritable-folder checks, `--sync-check` at three delays and three rates + batch bit-exact, two short real batches and an acoustic sync on the built-in speakers + mic, icon in the bundle, window state restored and clamped, launched without flags and quit cleanly, nine snapshots checked | `docs/phase6-empty.png`, `docs/phase6-files.png`, `docs/phase6-zoom.png`, `docs/phase6-audio.png`, `docs/phase6-audition.png`, `docs/phase6-batch.png`, `docs/phase6-sync.png`, `docs/phase6-dialog.png`, `docs/phase6-forget.png` |
 
 Environment used so far: macOS 26.6 (Apple Silicon), CMake 3.27.8, Apple Clang 21, Xcode
 Command Line Tools only, no Ninja. JUCE 9.0.3 fetched by CMake. Clean build about 1 minute.
 Terminal now has microphone access on the development Mac (the phase 4 hardware check recorded).
 
-## Next up: phase 6 — polish
+## Next steps after phase 6
 
-Spec: `PROMPT.md` section 8 phase 6 ("tooltips, keyboard shortcuts, error states, dropout
-detection, xrun redo, window state, final pass on visuals against the reference site") and the
-rules in section 5. Deliver, in this order:
+All six phases of `PROMPT.md` section 8 are done (version 0.1.0). Candidates, owner's choice:
 
-1. **Owner requests (2026-10-01):**
-   - **Pause between files** in OPTIONS, seconds, default **2 s**, persisted (`Settings`, typed
-     accessor + round-trip test). `BatchController::next()` waits that long after a file is
-     written before the next take starts (a message-thread timer, not a sleep); the status line
-     shows the wait ("File 4 of 7 — next in 2 s"); Pause/Stop/Skip work during the wait; the ETA
-     counts it.
-   - **Never scan the output subfolder as a source**: with "Include subfolders" on, skip any
-     subfolder whose name equals the configured subfolder name (default "Reamped"), and say so in
-     the status bar ("Skipped Reamped (output folder)"). `FolderScanner::scan` gets the name;
-     extend `FolderScannerTests`.
-2. **App icon**: black square with the accent mark like the top-bar logo, `ICON_BIG`/`ICON_SMALL`
-   in `juce_add_gui_app` (`CFBundleIconFile`), so Finder and the Dock no longer show a generic
-   icon.
-3. **Window size and position remembered** (`PROMPT.md` 3.7 and section 5): save on move/resize
-   and quit, restore on launch, clamp to a visible display and the 1100×700 minimum.
-4. **Tooltips everywhere**: audit every interactive control (all of them should have one; check
-   the SYNC level slider, the dialog buttons, the file list header buttons, the waveform
-   scrollbar, the meters) and make texts consistent.
-5. **Keyboard shortcuts** (section 5): Space = audition selected / stop, Delete = remove
-   selected, cmd/ctrl-A = select all, L / R = set channel on selection. They exist; verify them
-   with the confirmation dialog open (it takes Escape/Return and swallows the rest), while Sync
-   measures and while a batch runs, and document them (README + tooltips).
-6. **Error states**: device disappears during a take or a sync (the sync stops after 2 s without
-   progress; the batch pauses), disk full / unwritable destination mid-batch, microphone denied,
-   no output channel; every case a plain-language status-bar message with the right tone and a
-   recovery path. Re-open the device by itself when it comes back (open issue below).
-7. **Dropout detection and xrun redo**: exists since phase 4 (XR badge, "Redo files with
-   warnings"); review the gap thresholds on real hardware and decide with the owner whether NC
-   files should be redoable once their configuration is synced (they are not today).
-8. **Final visual pass** against https://plugins.omarchy.org and section 5 (spacing on the 8 px
-   grid, label tracking, disabled states, the dialog, the new SYNC rows), with snapshots
-   `docs/phase6*.png`.
-9. The rest of "Open issues" below, each closed or re-filed with a reason:
-   - **manual mouse pass** with the owner (phases 2-5 list: clicks, L/R, context menus, drag and
-     drop, zoom, the AUDIO/DESTINATION/OPTIONS/SYNC controls, the transport, the dialog buttons);
-   - **first cabled sync on the Apollo** (expect high confidence) and a batch with it; repeat the
-     acoustic built-in check once to see how much the split pair drifts between sessions;
-   - **device comes back**: reopen the saved device by itself when it reappears;
-   - decide with the owner: a "measure all rates" action, deleting stored measurements, NC files
-     in "Redo files with warnings", the thumbnail resolution at maximum zoom, hidden selected
-     files in collapsed groups;
-   - keep as known limits (document in the README if still true): band-limiting of resampled
-     takes, memory per loaded file (current + next, audition preview), gap detection on a loaded
-     machine, Windows untested (ASIO/WASAPI, type switching, sync), the stale Command Line Tools
-     headers on this Mac (owner decides), microphone prompts attributed to Terminal.
+1. **First Apollo session** (needs the interface). Checklist:
+   - Connect the Apollo, launch the app: it should open the saved device by itself if it was
+     saved before, else pick it in AUDIO (Driver CoreAudio, Output and Input device "Apollo …",
+     the output channel that feeds the amp, the input the amp returns on).
+   - Patch a cable from that output straight into that input (no amp), Sync level -12 dBFS,
+     press **Sync** at every sample rate the DI files use (switch the rate in AUDIO, Sync again).
+     Expect **high** confidence, a round trip of a few hundred samples, and note the difference
+     to the driver's figure (SYNC "Driver" tooltip).
+   - Re-patch through the amp, set the output level with Audition (Space) and "Peak at output",
+     run a short batch (two or three files) with the default 2 s pause; check the files open in
+     a DAW sample-aligned with their sources (null test against a DI-only loop if wanted), no NC
+     badge, the sidecar log's Latency lines say "measured".
+   - Unplug the Apollo during a take once: the batch pauses, the app reopens it by itself when it
+     is back, Resume finishes the batch.
+   - The manual mouse pass from "Open issues" can be done in the same session.
+2. **Windows build**: configure with Visual Studio + CMake, `JUCE_ASIO=1` with Steinberg's ASIO
+   SDK on the build machine, check ASIO/WASAPI device names, type switching, Sync and a batch on
+   an interface; fix what does not compile (Windows code is isolated in
+   `MicrophonePermission.cpp` and the device layer).
+3. **Release v0.1.0**: on approval, commit the phase 6 work on `develop`, then
+   `git checkout release && git merge --no-ff develop && git tag -a v0.1.0 -m "Reamp Rig 0.1.0"`,
+   push `release` and the tag, and keep working on `develop` (`CLAUDE.md`, "Branches"). Bump
+   `project(... VERSION ...)` in `CMakeLists.txt` for the next version; it reaches the bundle,
+   the sidecar log header and `getApplicationVersion()`.
 
-Hooks left by phase 5:
+## Phase 6 — what was done (2026-10-01)
 
-- `SyncController::isBusy()` / `AudioController::isSyncActive()` tell whether a measurement owns
-  the device; anything new that touches the engine (the pause timer) must respect it and
-  `isBatchActive()`.
-- `ui::ConfirmDialog` is the app's only modal; reuse it for any other confirmation (it is a
-  child of `MainComponent`, so snapshots capture it).
-- `--settings-file` isolates every check from the owner's settings; keep using it.
-- `--press-start`, `--sync-check[-rates|-hardware]`, `--sync-level`, `--virtual-reported-latency`
-  are in `Source/App/CommandLine.h`.
+1. **Owner requests.**
+   - **Pause between files**: OPTIONS "Pause between files (s)", 0..60 s in tenths, default 2 s,
+     persisted (`Settings::get/setPauseBetweenFilesSeconds`, key `pauseBetweenFilesSeconds`,
+     round-trip, clamp and garbage tests). `BatchController`: after a take, `next()` waits until
+     the deadline on a 100 ms message-thread `juce::Timer` (`Phase::waiting`, no sleep); status
+     line "File 2 of 7 — next in 1 s — ETA 00:14" with the upcoming file highlighted; Pause, Skip
+     (skips the upcoming file, the deadline stays) and Stop work during the wait; Resume waits
+     once more; the ETA adds the rest of the current wait plus one pause per unfinished file after
+     the current one (`BatchQueue::countUnfinishedAfterCurrent`, tested), and the pace excludes
+     the waits; Sync cannot start while a batch is active and the timer re-checks
+     `isSyncActive()` before recording. `--batch-check` prints every wait, its measured length and
+     the total.
+   - **Output subfolders are never sources**: `FolderScanner::scan/scanAsync` take the DESTINATION
+     subfolder name; while recursing, a subfolder with that name (case-insensitive on macOS) is
+     not entered and comes back in `ScanResult::skippedOutputFolders`; status bar "Added 7 files.
+     Skipped Reamped (output folder)" (the paths in its tooltip and the log). A folder added
+     directly is scanned. Tests: nested output folders, a similar name kept, another name, case,
+     no name, recursion off, added directly.
+2. **App icon**: `Assets/Icon/make_icon.py` (Python 3, no dependencies) writes `icon_16.png` …
+   `icon_1024.png`: a black square on the macOS icon grid with a hairline `line` border and the
+   accent-orange mark of the top-bar logo in the centre, no text, sharp corners. `ICON_BIG`
+   (1024) and `ICON_SMALL` (32) in `juce_add_gui_app`; the bundle has `AppIcon.icns` in
+   `Contents/Resources` and `CFBundleIconFile = AppIcon.icns`.
+3. **Window size and position**: saved (outer frame, `windowBounds`) on every move/resize and on
+   close, restored on launch through `clampWindowBounds` (pure, tested: fits unchanged, second
+   display kept, grows to 1100 x 700, shrinks to the display, moved back inside, title bar below
+   the menu bar, unplugged display -> centred on the main one, display smaller than the minimum,
+   no display). Full screen and minimised are not saved. Logged at launch ("Window: restored …").
+   Dev flag `--window-bounds=x,y,w,h`.
+4. **Tooltips**: audited every control. Added: the waveform scrollbar (`TooltipScrollBar`), the
+   list and sidebar scrollbars (`TooltipViewport`), the slider value boxes (`setSliderTooltip`;
+   JUCE copies a slider's tooltip to its text box only when the box is created, so the SYNC level
+   and Output level boxes had none), the empty drop zone, Forget (its tooltip says why it is
+   off). Reworded for consistency (full sentences, keys in parentheses, "Cmd-scroll"), and they
+   mention the new behaviour (Skip during the wait, Resume after the pause, Include subfolders
+   skipping output folders, Redo including synced NC files, collapse deselects).
+5. **Keyboard shortcuts** verified in every state: new test category `Keyboard` (confirmation
+   dialog: Return/Escape, Space/Delete/L/R/arrows swallowed, command shortcuts passed on so cmd-Q
+   still quits; list during a batch; collapsed groups via a synthetic click). Space while Sync
+   measures or a batch runs is refused by `AudioController::toggleAudition` with a status-bar
+   message (code path reviewed). Documented in the README ("Keyboard shortcuts") and the file-row
+   tooltip.
+6. **Error states**:
+   - Device disappears during a take: the batch pauses ("Paused: the audio device stopped. It
+     reopens by itself when it is back; then press Resume …"), during a sync the measurement ends
+     at once ("Sync stopped: the audio device stopped or was disconnected. Nothing was stored. …").
+   - **Reconnection**: the AudioController keeps the preferred (saved or user-chosen)
+     configuration and, on every device-list change and a 2 s poll, reopens it when it was missing
+     and is listed again (`DeviceSession::isPresent/runs` + `engine::ReconnectWatch`, unit tested
+     with the fake device: unplug while open, comeback during a take is deferred, missing at
+     launch, picked again by hand). Never under a running batch or a sync; a paused batch then
+     says "<device> is back. Press Resume". Checked end to end with `--virtual-unplug=4:2`
+     (`LoopbackTestDevice::setPresent`): the batch paused during file 2, the device reopened by
+     itself, the check resumed, 5/5 Done and exact.
+   - **Disk full / unwritable destination**: `FileWriter` now checks every write and the size on
+     disk after closing (a full disk was silently truncating takes before: `write()`'s result was
+     ignored), deletes the temp file and flags `writeFailed`; the batch pauses with "Paused: the
+     disk is full, so Riff 01_reamp.wav could not be written to … Free some space, then press
+     Resume" (checked on a 2 MB disk image) or "Paused: cannot write to <folder>. Check that the
+     folder still exists and is writable, then press Resume, or Stop and choose another output
+     folder" (checked on a read-only folder); in subfolder mode an unwritable source folder only
+     marks that file Error. The sidecar log gets a "Write failed" line.
+   - Microphone denied, no device, no output or input channel: every "Cannot start / audition /
+     sync" message now ends with what to do ("Pick an output device and channel in AUDIO", …).
+7. **Dropout thresholds** reviewed on the built-in speakers + microphone: real batches at buffer
+   512 and buffer 64 (two 1 s files each, -24 dB) gave no XR, so the thresholds (gap > 1.75
+   buffers and > buffer + 3 ms, i.e. 4.3 ms at 64 samples) stay. **NC redo**: NC files become
+   redoable once their configuration has a measurement (`BatchController::getRedoableIds`, the
+   take's `SyncKey` is remembered per file for the session); the header button and context menu
+   follow the sync store (refreshed after Sync and Forget).
+8. **Visual pass** against section 5: disabled text fields now show muted text during a batch
+   (they looked editable), the empty RECORDED lane says "Not recorded yet" instead of a stray
+   dash, the Forget dialog lists the key and the value on two lines (one was truncated), Sync |
+   Forget share a row on the 8 px grid (fixed-width field support in `SidebarSection`), group
+   headers show the home folder as "~" (already the case since phase 2; visible in the
+   snapshots). Fixed a mis-encoded "±" in the confidence tooltip. Snapshots re-captured with the
+   new logo (below); the old `docs/phase1-5*.png` were removed.
+9. **SYNC Forget**: a secondary "Forget" beside Sync deletes the current configuration's
+   measurement after the themed confirmation (`Settings::removeSyncMeasurement`, tested).
+   **Collapsed groups**: collapsing deselects the group's files (`FileTree::deselect`, tested),
+   cmd-A selects visible files only.
+10. Version 0.1.0 (CMake) reaches the bundle and the sidecar log header ("Reamp Rig 0.1.0 batch
+    log"). README: "Using Reamp Rig" (setup, sync, batch, output, warnings glossary, shortcuts),
+    "Known limits", new dev flags; developer sections kept. `ARCHITECTURE.md` and
+    `Tests/README.md` updated.
+
+Verification commands (repository root; `SP` = the session scratchpad with the test audio,
+`D` = `build/demo`, a copy under the home folder so headers show "~"):
+
+```sh
+cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release   # only the known stale-CLT warning
+cmake --build build --config Release --clean-first -j"$(sysctl -n hw.ncpu)"   # exit 0, no warnings from our code
+ctest --test-dir build --output-on-failure      # 14/14 passed: 214 test cases, 1528 checks
+APP="build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig"
+# 1. Pause 1 s (settings file with pauseBetweenFilesSeconds = 1.0), virtual loopback:
+"$APP" --settings-file="$SP/p6/final.settings" --open="$SP/audio/Session A" --open="$SP/audio/Session B" \
+       --output-level=0 --output-channel=3 --input-channel=2 --virtual-speed=8 --batch-check="$SP/p6/out1"
+#    wait: File 3 of 7 — next in 1 s — ETA 00:14 / waited 1.03 s before file 3 ... (6 waits)
+#    wall time 17.57 s, of which pauses between files 6.15 s; 7/7 Done, exact; PASS, exit 0
+# 2. Unplug: same with --open="$SP/audio/Session A" --virtual-speed=4 --virtual-unplug=4:2 -> paused, reopened, resumed, PASS
+# 3. Disk full (2 MB HFS+ image): --batch-check=<mount> -> "Paused: the disk is full, so Riff 01_reamp.wav could not
+#    be written to …"; read-only folder -> "Paused: cannot write to …"
+# 4. Sync regression: --virtual-loopback=37 / 1500 --sync-check -> 293 / 1756 smp exact, high; sync at 48/44.1/96 kHz +
+#    batch with a wrong driver estimate (100) -> 556 smp exact at each rate, 7/7 Done "latency 556 smp measured", PASS
+# 5. Real hardware, built-in speakers + mic, -24 dB, two 1 s files (440 Hz at -12 dBFS), default 2 s pause:
+"$APP" --settings-file="$SP/p6/hw.settings" --open="$SP/p6/hw" --device-type=CoreAudio --output-device="MacBook Pro Speakers" \
+       --input-device="MacBook Pro Microphone" --output-level=-24 --batch-check-hardware --batch-check="$SP/p6/out_hw"
+#    2/2 Done (48000 samples each, NC), "waited 2.05 s before file 2", PASS; again at --buffer-size=64: no XR
+#    Acoustic sync at -30 dBFS: 3431 smp (5/5, low: peak-to-sidelobe 9 dB at system volume 38 %); phase 5 had 3425
+# 6. Icon: plutil -p ".../Reamp Rig.app/Contents/Info.plist" -> CFBundleIconFile => "AppIcon.icns";
+#    Contents/Resources/AppIcon.icns (6340 bytes)
+# 7. Window: --window-bounds=60,100,1300,780 -> saved "60 68 1300 812" (frame); relaunch -> "Window: restored 60 100
+#    1300 780"; hand-edited "-5000 -5000 900 500" -> restored 206 173 1100 700 (centred, minimum size)
+# 8. Snapshots (all with --settings-file, virtual device unless noted):
+#    phase6-empty, phase6-files, phase6-zoom (--view=2.9:3.6), phase6-audio (real speakers + mic, no playback),
+#    phase6-audition (--audition-check=6), phase6-batch (--batch-check, --sidebar-scroll=options),
+#    phase6-sync (--sync-check, --sidebar-scroll=sync), phase6-dialog (--press-start, only 48 kHz measured),
+#    phase6-forget (--press-forget)
+# 9. Real app, no flags, 6 s, quit via AppleScript: exit 0
+```
+
+Sound played during verification: two 1 s 440 Hz tones per real batch (two batches) at -24 dB
+output level and five 57 ms sync bursts at -30 dBFS through the built-in speakers; nothing else.
+Every check used `--settings-file` except the final no-flag launch (which only saved the window
+position into the owner's settings).
+
+Deviations from the spec / task (phase 6):
+
+1. **Resume waits the pause** between files once more before recording (the interrupted take or a
+   device that just came back may still ring); the first file of a batch starts at once.
+2. **Skip during the wait** skips the file that was about to start; the deadline stays for the
+   next one.
+3. **cmd-A selects the visible files** (files in collapsed groups stay unselected), following the
+   decision that bulk actions never hit hidden rows.
+4. The confirmation dialog passes **command shortcuts** (cmd-Q) on instead of swallowing them.
+5. The saved device is **not switched under a running batch** (e.g. one that runs on a fallback
+   device); it is reopened when the batch ends. A paused batch never resumes by itself.
+6. The pause field has its own row ("Pause between files (s)"); the label does not fit half the
+   sidebar width beside "Tail (ms)".
+7. Window state is the window's outer frame; full screen / minimised are not remembered.
+8. The icon is a script-generated PNG pair turned into `.icns` by JUCE (no Icon Composer file);
+   JUCE rescales 1024/32 px for the other sizes, the other PNGs are kept for reference.
+9. Thumbnail resolution at maximum zoom kept as a documented known limit (a fix would read
+   samples from the file on the message thread or add a second cache: more than an hour).
+10. More dev flags: `--window-bounds`, `--press-forget`, `--virtual-unplug`
+    (`Source/App/CommandLine.h`).
 
 ## Phase 5 — what was done (2026-10-01)
 
@@ -548,92 +663,55 @@ Deviations from the spec, all accepted:
 
 ## Open issues
 
-- **Owner requests for phase 6 (2026-10-01):**
-  1. A **pause between files** setting in OPTIONS, in seconds, default **2 s**, persisted.
-     The batch waits that long after a file is written before the next take starts, so amp
-     and reverb tails die out. Show the wait in the status line.
-  2. **Never scan the output subfolder as a source.** When a folder is added with subfolders
-     on, skip any subfolder whose name equals the configured output subfolder name
-     (default "Reamped"), and report the skip in the status bar.
-  The default suffix `_reamp` is approved as is.
-- **No app icon.** The bundle has no `CFBundleIconFile`, so Finder and the Dock show a generic
-  icon and the app looks the same as the raw executable inside `Contents/MacOS`. The owner
-  launched that inner binary once by mistake and got a Terminal window. Phase 6: add an icon
-  set (black square, accent mark, matching the top-bar logo) via `ICON_BIG`/`ICON_SMALL` in
-  `juce_add_gui_app`.
-- **Microphone prompts (resolved for Terminal).** Phase 3 left two prompts for **Terminal**
-  (apps launched from a shell are attributed to their responsible process). By 2026-10-01
-  Terminal has access: the phase 4 hardware run recorded without a prompt. Launched from Finder
-  (`open …app`) the app is asked under its own name. `tccutil reset Microphone
-  com.apple.Terminal` undoes a decision.
-- Phase 3, verified manually by the owner on real hardware on 2026-10-01: files load,
-  waveforms render, the input meter moves with a live signal, real devices show in the pickers,
-  and output audition plays through the speakers with the playhead tracking. **Audition and the
-  input meter are now verified.** Mouse interactions (below) are still unverified.
-- **Mouse interactions not exercised automatically.** Click, shift/cmd-click, clicking L/R,
-  the context menu, collapsing groups, drag-and-drop from Finder, scroll/pinch zoom, dragging the
-  marker and the Add dialogs could not be driven: this Mac does not allow synthetic input
-  (`osascript` keystrokes refused, error 1002) or screen capture. Phase 3 adds: the AUDIO combos
-  and their popups, the level slider, clicking a meter to clear CLIP, the Audition button and
-  Space (window-level key handler; tested only through code review). Needs a manual pass.
-  Phase 4 adds: the DESTINATION radios, the output-folder chooser, the text fields and combos,
-  the channel-tag and tail fields, clicking Start / Pause / Resume / Skip / Stop, the new context
-  menu items and the "Redo warnings" button, hovering status cells for the warning tooltip. The
-  batch itself, including pause/resume/skip/stop, was driven programmatically
-  (`--batch-check`, `--batch-check-transport`), not by clicks. Phase 5 adds: the Sync button and
-  Stop, the sync level slider, the Start anyway / Cancel buttons and Return/Escape in the dialog,
-  hovering the SYNC readouts and the chip for their tooltips. Sync and the dialog were driven
-  through `--sync-check` and `--press-start`, not by clicks.
-- **Phase 4 on real hardware**: one quiet 2 s batch on the built-in speakers + microphone
-  (exact length, sidecar log, NC warning). The take recorded a peak of -5.8 dBFS from a -36 dBFS
-  output: room/microphone level, not checked further.
-- **Sync on real hardware (phase 5)**: only acoustically, built-in speakers -> room -> built-in
-  microphone at -30 dBFS: 3425 smp (71.4 ms), medium confidence (4 of 5 within ±1; the fifth 3434
-  and inverted, a reflection), peak-to-sidelobe 16-17 dB, while the driver reports 3482 + 1346 =
-  4828 smp. So the CoreAudio estimate for this split pair is about 29 ms too long (it includes
-  safety offsets / the aggregate's buffering, not checked further). Split devices drift, so this
-  value is not stable across sessions; not measured twice. **No cabled interface loop (Apollo)
-  measured yet**: that is the first real test of Sync and of the high-confidence path on hardware.
-- Sync with ASIO / WASAPI never tested (Windows).
-- **No "measure all rates" action**: Sync measures the current configuration; the user switches the
-  rate and presses Sync again for each rate the files use (the Start dialog lists what is
-  missing). `--sync-check-rates` does it for checks. Ask the owner whether a button is wanted
-  (not in the spec).
-- Stored measurements are never pruned and cannot be deleted from the UI (a new measurement
-  replaces the old one for its key). Harmless; mention if it matters.
-- Files recorded with NC stay NC after the configuration is synced; "Reset status" re-queues
-  them ("Redo files with warnings" still excludes NC, see phase 4 deviation 5).
-- **No gap between files** (owner request 1 above, phase 6): the next take starts as soon as the
-  previous file is written, so an amp/reverb tail of file N can still sound while file N+1 starts.
-- **"Subfolder next to source" output is scanned again** (owner request 2 above, phase 6) if the
-  user later adds the source folder with "Include subfolders" on.
-- Resampled takes lose source content above about 0.447 of the lower rate (band-limiting). The
-  synthetic test files have hard note cut-offs, so their resampled results differ from the raw
-  source by -20 to -67 dBFS at those edges while matching the offline resampled reference to
-  24-bit rounding. Real DI files rarely carry such content.
-- The batch holds the played channel of the current and the next file in memory (4 bytes per
-  sample each, same limit as the audition preview).
-- Gap detection uses wall-clock callback spacing; on a heavily loaded machine with tiny buffers
-  scheduling jitter above about 0.75 buffer + 3 ms would be reported as a dropout (warning only).
-- When the open device disappears the app stops and warns but does not switch back by itself
-  when the device returns; pick it again (or restart).
-- Driver type switching on Windows: JUCE opens the new type's default devices for a moment
-  (the callback is not forwarded to them). ASIO/WASAPI never tested.
-- The audition preview holds the played channel of the lead file in memory (4 bytes per sample;
-  files over about 1 billion samples are refused with a status message).
-- Files inside a collapsed group stay selected, so L/R, Delete and Reset status apply to them
-  even though they are hidden (same as Finder). Revisit if it confuses.
-- At the maximum zoom (50 ms visible) the thumbnail (64 samples per point) looks stepped.
-  Fine for level checks; raise the resolution if phase 5 wants to inspect sync visually.
-- **Broken Command Line Tools on the development Mac.** A stale, partial
-  `/Library/Developer/CommandLineTools/usr/include/c++/v1` hides the SDK's libc++ headers.
-  `CMakeLists.txt` detects this and adds `-nostdinc++ -isystem <SDK>/usr/include/c++/v1` with
-  a warning. Permanent fix is reinstalling the Command Line Tools or removing that folder.
-  Not done; the owner decides.
-- Window size and position are not remembered yet (phase 6).
-- Windows build has never been attempted (spec: compile-only expectation until later).
+Final list after phase 6 (2026-10-01). Everything else from the phase 5 list was closed (see
+"Closed in phase 6" below).
+
+- **Manual mouse pass: done by the owner on 2026-10-01** on the built-in speakers and
+  microphone, after phase 6: clicking around the file list, starting batches, syncing and the
+  dialogs. Verdict: "Looking really good", no defects reported. Closed; anything found later
+  is filed as a normal bug.
+- **Needs the Apollo**: the first cabled sync (expect high confidence) and a batch with it,
+  including unplugging the interface once during a take (reconnection was only checked on the
+  virtual device). Checklist in "Next steps after phase 6". The acoustic built-in check was
+  repeated: 3431 smp today vs 3425 in phase 5 (the split pair drifts by a few samples between
+  sessions, as expected for separate clocks); the driver's estimate changed from 4828 to 3379 smp
+  (CoreAudio reports a different input latency today), confidence low at a lower system volume.
+- **Windows untested** (ASIO/WASAPI, driver-type switching where JUCE briefly opens the new
+  type's defaults, Sync): known limit, README; "Next steps" item 2.
+- **Stale Command Line Tools headers** on the development Mac: `CMakeLists.txt` keeps its
+  workaround and warning, README explains the fix (`sudo rm -rf
+  /Library/Developer/CommandLineTools/usr/include/c++` or reinstall the CLT). Owner's decision.
+- **Known limits, documented in the README**: band-limiting of resampled takes; memory per
+  loaded file (current + next, audition preview); gap detection on a heavily loaded machine
+  (thresholds reviewed on real hardware at buffers 64 and 512: no false XR); thumbnail
+  resolution at maximum zoom; microphone prompts attributed to the terminal when launched from
+  one.
+
+Closed in phase 6: pause between files (done); output subfolder scanned again (skipped now); no
+app icon (done); window state (done); device comes back (reopened by itself); "measure all rates"
+(decided: no); deleting stored measurements (Forget); NC files in "Redo files with warnings"
+(redoable once synced); hidden selected files in collapsed groups (deselected); microphone
+prompts for Terminal (resolved since phase 4); audition and input meter (verified by the owner);
+phase 4 real-hardware note (informational, superseded by the phase 6 runs); sync on real hardware
+(re-filed under "Needs the Apollo").
 
 ## Decision log
+
+- 2026-10-01: **NC files are redoable once synced**: "Redo files with warnings" includes NC files
+  whose device configuration has a measurement by now; the tooltip says so.
+- 2026-10-01: **Stored measurements**: a small secondary "Forget" in SYNC deletes the current
+  configuration's measurement after the themed confirmation; no bulk management UI.
+- 2026-10-01: **Collapsing a folder group deselects its files**, so bulk actions never hit hidden
+  rows (cmd-A selects visible files only).
+- 2026-10-01: **Thumbnail resolution at maximum zoom** stays a documented known limit.
+- 2026-10-01: **Stale Command Line Tools headers** stay the owner's decision; the CMake workaround
+  and the README note remain.
+- 2026-10-01: **Pause between files** default 2 s, persisted; default suffix `_reamp` kept; the
+  output subfolder is never scanned as a source.
+- 2026-10-01: A write failure that would repeat (disk full, unwritable single output folder)
+  **pauses** the batch; one unwritable source folder only fails its files.
+- 2026-10-01: The saved device is **reopened by itself** when it comes back, never under a running
+  batch; a paused batch waits for Resume.
 
 - 2026-10-01: **Sync stays manual per sample rate.** The owner is fine switching the rate and
   pressing Sync for each configuration; no "measure all rates" action will be added.

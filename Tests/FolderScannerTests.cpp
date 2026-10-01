@@ -203,6 +203,58 @@ namespace rf::test
                 expectEquals (tree.getNumFiles(), 5);
             }
 
+            beginTest ("output subfolders are never scanned as sources");
+            {
+                // A/Reamped/ holds earlier results, A/sub/Reamped/ too (nested), and
+                // A/sub/reamped2/ only starts with the name. Recursion on.
+                expect (writeWav (A.getChildFile ("Reamped/a2_reamp.wav"), 1, 48000.0, 24, 480));
+                expect (writeWav (A.getChildFile ("sub/Reamped/s1_reamp.wav"), 1, 96000.0, 24, 480));
+                expect (writeWav (A.getChildFile ("sub/Reamped2/keep.wav"), 1, 48000.0, 24, 480));
+
+                const auto r = FolderScanner::scan ({ A }, true, formats, {}, "Reamped");
+                expectEquals (relativePaths (r.files, root).joinIntoString (","),
+                              juce::String ("A/a2.wav,A/a10.wav,A/sub/s1.wav,A/sub/deeper/d1.wav,A/sub/Reamped2/keep.wav"));
+                expectEquals ((int) r.skippedOutputFolders.size(), 2);
+
+                if (r.skippedOutputFolders.size() == 2)
+                {
+                    expect (r.skippedOutputFolders[0] == A.getChildFile ("Reamped"));
+                    expect (r.skippedOutputFolders[1] == A.getChildFile ("sub/Reamped"));
+                }
+
+                expect (r.skipped.empty(), "an output folder is not an unreadable file");
+
+                beginTest ("output subfolder: another name, case, no name, recursion off, added directly");
+
+                // Another configured name skips that one instead.
+                const auto other = FolderScanner::scan ({ A }, true, formats, {}, "deeper");
+                expect (! relativePaths (other.files, root).contains ("A/sub/deeper/d1.wav"));
+                expect (relativePaths (other.files, root).contains ("A/Reamped/a2_reamp.wav"));
+                expectEquals ((int) other.skippedOutputFolders.size(), 1);
+
+                // Case: macOS and Windows file systems ignore it, so does the skip.
+                const auto upper = FolderScanner::scan ({ A }, true, formats, {}, "REAMPED");
+                expectEquals ((int) upper.skippedOutputFolders.size(), juce::File::areFileNamesCaseSensitive() ? 0 : 2);
+
+                // No name: everything is scanned (the old behaviour).
+                const auto all = FolderScanner::scan ({ A }, true, formats);
+                expectEquals ((int) all.files.size(), 7);
+                expect (all.skippedOutputFolders.empty());
+
+                // Recursion off: subfolders are not entered anyway, so none is reported.
+                const auto flat = FolderScanner::scan ({ A }, false, formats, {}, "Reamped");
+                expectEquals ((int) flat.files.size(), 2);
+                expect (flat.skippedOutputFolders.empty());
+
+                // The user adds the output folder itself: that is a choice, it is scanned.
+                const auto direct = FolderScanner::scan ({ A.getChildFile ("Reamped") }, true, formats, {}, "Reamped");
+                expectEquals (namesOf (direct.files).joinIntoString (","), juce::String ("a2_reamp.wav"));
+                expect (direct.skippedOutputFolders.empty());
+
+                for (const auto* sub : { "Reamped", "sub/Reamped", "sub/Reamped2" })
+                    A.getChildFile (sub).deleteRecursively();
+            }
+
             beginTest ("stable order: adding files in reverse gives the same list");
             {
                 auto files = FolderScanner::scan ({ A, B }, true, formats).files;

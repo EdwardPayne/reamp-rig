@@ -30,6 +30,7 @@ namespace rf::model
     {
         std::vector<ScannedFile> files;     // deduplicated, in list order (see FolderScanner::scan)
         std::vector<SkippedFile> skipped;   // unreadable/unsupported files, reported to the user
+        std::vector<juce::File> skippedOutputFolders;  // subfolders named like the output subfolder
         bool aborted = false;
     };
 
@@ -46,6 +47,11 @@ namespace rf::model
         explicitly given file that is not readable audio, is reported in `skipped`.
         The same file (by absolute path) is never returned twice.
 
+        Output subfolders are never sources (phase 6): while recursing, a subfolder whose name
+        equals `outputSubfolderName` (the DESTINATION "Subfolder" name, e.g. "Reamped";
+        compared case-insensitively where the file system is) is not entered and is listed in
+        `skippedOutputFolders` instead. A folder the user adds directly is always scanned.
+
         scan() is synchronous and thread-agnostic (used by tests). scanAsync() runs it on the
         scanner's own background thread and delivers the result on the message thread.
     */
@@ -55,10 +61,12 @@ namespace rf::model
         FolderScanner();
         ~FolderScanner();
 
-        /** Synchronous scan. `shouldAbort` is polled between files. */
+        /** Synchronous scan. `shouldAbort` is polled between files. An empty
+            `outputSubfolderName` skips nothing. */
         static ScanResult scan (const juce::Array<juce::File>& inputs, bool recursive,
                                 juce::AudioFormatManager& formats,
-                                const std::function<bool()>& shouldAbort = {});
+                                const std::function<bool()>& shouldAbort = {},
+                                const juce::String& outputSubfolderName = {});
 
         /** Reads the header of one file. Returns false and sets `reason` if it is not usable. */
         static bool readInfo (const juce::File&, juce::AudioFormatManager&, AudioFileInfo& info, juce::String& reason);
@@ -67,7 +75,8 @@ namespace rf::model
 
         /** Queues a scan on the background thread; `onDone` is called on the message thread
             (never after this scanner has been destroyed). Scans complete in the order queued. */
-        void scanAsync (juce::Array<juce::File> inputs, bool recursive, Callback onDone);
+        void scanAsync (juce::Array<juce::File> inputs, bool recursive, Callback onDone,
+                        juce::String outputSubfolderName = {});
 
         /** Number of queued or running scans whose results have not been delivered yet. */
         int getNumPending() const noexcept   { return pending; }

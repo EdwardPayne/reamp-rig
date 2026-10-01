@@ -167,6 +167,7 @@ namespace rf::ui
         }
 
         std::function<void()> onSkipCurrent, onRedoWarnings;
+        std::function<int()> getRedoableCount;
 
         /** Scrolls the enclosing viewport so the item's row is visible. */
         void scrollToItem (ItemId id)
@@ -292,7 +293,11 @@ namespace rf::ui
 
             if (mods.isCommandDown() && upper == 'A')
             {
-                tree.selectAll();
+                // Every visible file: files in collapsed groups stay out of bulk actions.
+                const auto ids = visibleFileIds();
+                const auto lead = tree.getLead();
+                tree.setSelection (ids, std::find (ids.begin(), ids.end(), lead) != ids.end() ? lead
+                                                                                                : (ids.empty() ? 0 : ids.front()));
                 return true;
             }
 
@@ -330,7 +335,7 @@ namespace rf::ui
 
             if (row.kind == Row::groupRow)
                 return tree.getGroups()[(size_t) row.group].folder.getFullPathName()
-                       + "\nClick to collapse or expand this folder.";
+                       + "\nClick to collapse or expand this folder (collapsing deselects its files).";
 
             const auto* item = tree.find (row.id);
 
@@ -341,7 +346,7 @@ namespace rf::ui
 
             if (column (columns.lr, rowBounds (index)).contains (pos))
                 return item->hasChannelChoice()
-                         ? "Channel sent to the amp. Applies to all selected stereo files. Keys: L / R."
+                         ? "Channel sent to the amp. Applies to all selected stereo files (L / R)."
                          : "Mono file: played as is, no channel choice.";
 
             if (column (columns.status, rowBounds (index)).contains (pos)
@@ -362,7 +367,8 @@ namespace rf::ui
             }
 
             return item->file.getFullPathName()
-                   + "\nShift-click: range. Cmd-click: add or remove. Right-click: actions.";
+                   + "\nShift-click: range. Cmd-click: add or remove. Right-click: actions."
+                     "\nKeys: Space audition, L / R channel, Delete remove, Cmd-A select all, Up / Down move.";
         }
 
     private:
@@ -718,7 +724,8 @@ namespace rf::ui
             menu.addSeparator();
             menu.addItem (3, "Reset status" + suffix);
 
-            const auto withWarnings = (int) tree.getIdsWithWarnings (model::Warning::redoable).size();
+            const auto withWarnings = getRedoableCount != nullptr ? getRedoableCount()
+                                                                  : (int) tree.getIdsWithWarnings (model::Warning::redoable).size();
             menu.addItem (5, "Redo files with warnings" + (withWarnings > 0 ? " (" + juce::String (withWarnings) + ")" : juce::String()),
                           withWarnings > 0 && ! batchActive);
             menu.addItem (6, "Skip current file", batchActive && currentItem != 0);
@@ -762,7 +769,19 @@ namespace rf::ui
             const auto key = folder.getFullPathName();
 
             if (collapsed.erase (key) == 0)
+            {
                 collapsed.insert (key);
+
+                // Hidden rows are never part of a bulk action (decision 2026-10-01).
+                std::vector<ItemId> hidden;
+
+                for (const auto& g : tree.getGroups())
+                    if (g.folder == folder)
+                        for (const auto& item : g.files)
+                            hidden.push_back (item.id);
+
+                tree.deselect (hidden);   // notifies the tree, which rebuilds the rows
+            }
 
             rebuild();
 
@@ -820,17 +839,20 @@ namespace rf::ui
             addAndMakeVisible (b);
         }
 
-        addFilesButton.setTooltip ("Choose audio files to add to the list.");
-        addFolderButton.setTooltip ("Choose a folder to scan for audio files (see Include subfolders).");
+        addFilesButton.setTooltip ("Choose audio files to add to the list (or drop them on the window).");
+        addFolderButton.setTooltip ("Choose a folder to scan for audio files, with its subfolders when Include subfolders "
+                                    "is on (OPTIONS). Output folders (\"Reamped\") are skipped.");
         addFilesButton.onClick  = [this] { if (onAddFiles != nullptr)  onAddFiles(); };
         addFolderButton.onClick = [this] { if (onAddFolder != nullptr) onAddFolder(); };
 
         setButtonStyle (redoButton, ButtonStyle::secondary);
-        redoButton.setTooltip ("Queue again every file whose take had a dropout, silence or clipping.");
+        redoButton.setTooltip ("Queue again every file whose take had a dropout (XR), silence (SIL) or clipping (CLIP), and "
+                               "every NC file whose device configuration has been synced since.");
         redoButton.onClick = [this] { if (onRedoWarnings != nullptr) onRedoWarnings(); };
         addChildComponent (redoButton);
 
         rows->onSkipCurrent  = [this] { if (onSkipCurrent != nullptr)  onSkipCurrent(); };
+        rows->getRedoableCount = [this] { return countRedoable(); };
         rows->onRedoWarnings = [this] { if (onRedoWarnings != nullptr) onRedoWarnings(); };
 
         tree.addListener (this);
@@ -874,9 +896,25 @@ namespace rf::ui
         rows->repaintItem (id);
     }
 
+    int FileTreeView::countRedoable() const
+    {
+        return getRedoableIds != nullptr ? (int) getRedoableIds().size()
+                                         : (int) tree.getIdsWithWarnings (model::Warning::redoable).size();
+    }
+
+    juce::String FileTreeView::getTooltip()
+    {
+        // Only the empty drop zone; the rows, buttons and scrollbar have their own.
+        if (tree.getNumFiles() == 0 && getMouseXYRelative().y > headerHeight)
+            return "Drop DI files or folders anywhere on the window, or use Add files" + ellipsis() + " / Add folder"
+                 + ellipsis() + ". Folders are scanned with their subfolders when Include subfolders (OPTIONS) is on.";
+
+        return {};
+    }
+
     void FileTreeView::updateRedoButton()
     {
-        const auto show = ! batchActive && ! tree.getIdsWithWarnings (model::Warning::redoable).empty();
+        const auto show = ! batchActive && countRedoable() > 0;
 
         if (show != redoButton.isVisible())
         {

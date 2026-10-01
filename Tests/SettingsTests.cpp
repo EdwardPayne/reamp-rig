@@ -4,6 +4,7 @@
 namespace rf::test
 {
     using rf::app::Settings;
+    using rf::app::clampWindowBounds;
 
     /*  Settings round-trip (PROMPT.md section 7) for every key persisted so far: include
         subfolders (phase 2), the device configuration and the output gain (phase 3), the
@@ -420,6 +421,131 @@ namespace rf::test
                 // A valid write after garbage keeps the valid entries and drops the rest.
                 reloaded.setSyncMeasurement ({ "CoreAudio", "Box", "Box", 44100.0, 64 }, measurement (50, 44100.0, SyncConfidence::medium));
                 expectEquals ((int) reloaded.getSyncMeasurements().size(), 3);
+            }
+
+            beginTest ("sync store: Forget removes one key only and survives a reload");
+            {
+                const auto apollo48 = syncKey ("Apollo Twin", 48000.0, 256);
+                const auto apollo96 = syncKey ("Apollo Twin", 96000.0, 256);
+
+                {
+                    Settings settings (file);
+                    expectEquals ((int) settings.getSyncMeasurements().size(), 5);
+                    expect (settings.removeSyncMeasurement (apollo48));
+                    expect (! settings.removeSyncMeasurement (apollo48));                              // already gone
+                    expect (! settings.removeSyncMeasurement (syncKey ("Apollo Twin", 44100.0, 256))); // never stored
+                    expect (! settings.getSyncMeasurement (apollo48).has_value());
+                }
+
+                Settings reloaded (file);
+                expectEquals ((int) reloaded.getSyncMeasurements().size(), 4);
+                expect (! reloaded.getSyncMeasurement (apollo48).has_value());
+                expectEquals (reloaded.getSyncMeasurement (apollo96)->samples, 598);
+
+                // Measuring again after a Forget stores it as new.
+                reloaded.setSyncMeasurement (apollo48, measurement (314, 48000.0, SyncConfidence::high));
+                expectEquals (reloaded.getSyncMeasurement (apollo48)->samples, 314);
+                expectEquals ((int) reloaded.getSyncMeasurements().size(), 5);
+            }
+
+            beginTest ("pause between files: default 2 s, round trip, clamped to 0..60 s in tenths");
+            {
+                const auto pauseFile = dir.get().getChildFile ("pause.settings");
+
+                expectEquals (Settings (pauseFile).getPauseBetweenFilesSeconds(), 2.0);
+
+                for (const auto& [in, out] : { std::pair<double, double> { 0.0, 0.0 }, { 1.0, 1.0 }, { 2.5, 2.5 }, { 0.04, 0.0 },
+                                               { 0.36, 0.4 }, { 60.0, 60.0 }, { 61.0, 60.0 }, { -3.0, 0.0 },
+                                               { std::numeric_limits<double>::quiet_NaN(), 2.0 },
+                                               { std::numeric_limits<double>::infinity(), 2.0 } })
+                {
+                    {
+                        Settings settings (pauseFile);
+                        settings.setPauseBetweenFilesSeconds (in);
+                    }
+
+                    expectEquals (Settings (pauseFile).getPauseBetweenFilesSeconds(), out, "in " + juce::String (in));
+                }
+
+                for (const auto& [text, out] : { std::pair<const char*, double> { "garbage", 2.0 }, { "", 2.0 }, { "7", 7.0 },
+                                                 { "1e9", 60.0 }, { "-1", 0.0 }, { "0.25", 0.3 } })
+                {
+                    {
+                        Settings settings (pauseFile);
+                        settings.getPropertiesFile().setValue ("pauseBetweenFilesSeconds", text);
+                    }
+
+                    expectEquals (Settings (pauseFile).getPauseBetweenFilesSeconds(), out, juce::String ("text ") + text);
+                }
+            }
+
+            beginTest ("window bounds: round trip, nothing saved, garbage ignored");
+            {
+                const auto windowFile = dir.get().getChildFile ("window.settings");
+
+                expect (! Settings (windowFile).getWindowBounds().has_value());
+
+                for (const auto r : { juce::Rectangle<int> (120, 80, 1300, 820), juce::Rectangle<int> (-1800, -200, 1100, 700) })
+                {
+                    {
+                        Settings settings (windowFile);
+                        settings.setWindowBounds (r);
+                        settings.setWindowBounds ({});        // empty bounds are ignored
+                    }
+
+                    expect (Settings (windowFile).getWindowBounds() == std::optional<juce::Rectangle<int>> (r), r.toString());
+                }
+
+                for (const auto* text : { "1 2 3", "a b c d", "10 10 0 700", "10 10 1100 -5", "1 2 3 4 5", "", "999999999 0 1100 700" })
+                {
+                    {
+                        Settings settings (windowFile);
+                        settings.getPropertiesFile().setValue ("windowBounds", text);
+                    }
+
+                    expect (! Settings (windowFile).getWindowBounds().has_value(), juce::String ("text '") + text + "'");
+                }
+            }
+
+            beginTest ("window bounds are clamped to a visible display and the 1100 x 700 minimum");
+            {
+                using R = juce::Rectangle<int>;
+                const juce::Point<int> minSize (1100, 700);
+                const R main (0, 25, 1512, 957);              // MacBook Pro user area (below the menu bar)
+                const R left (-1920, 0, 1920, 1055);          // external display left of it
+                const juce::Array<R> both { main, left };
+
+                // Fits: unchanged.
+                expect (clampWindowBounds (R (100, 80, 1280, 800), both, minSize) == std::optional<R> (R (100, 80, 1280, 800)));
+
+                // On the second display: stays there.
+                expect (clampWindowBounds (R (-1800, 50, 1300, 820), both, minSize) == std::optional<R> (R (-1800, 50, 1300, 820)));
+
+                // Too small: grows to the minimum.
+                expect (clampWindowBounds (R (100, 80, 400, 300), both, minSize) == std::optional<R> (R (100, 80, 1100, 700)));
+
+                // Larger than the display: shrinks to it and moves inside.
+                expect (clampWindowBounds (R (-50, 0, 3000, 2000), juce::Array<R> { main }, minSize) == std::optional<R> (main));
+
+                // Hanging off the right and bottom edges: moved back inside, size kept.
+                expect (clampWindowBounds (R (1000, 600, 1200, 750), juce::Array<R> { main }, minSize)
+                        == std::optional<R> (R (312, 232, 1200, 750)));
+
+                // Above the menu bar: the title bar comes back below it.
+                expectEquals (clampWindowBounds (R (100, -300, 1200, 750), juce::Array<R> { main }, minSize)->getY(), 25);
+
+                // The display it was on is gone (monitor unplugged): centred on the main display.
+                const auto moved = clampWindowBounds (R (-1800, 50, 1300, 820), juce::Array<R> { main }, minSize);
+                expect (moved.has_value() && main.contains (*moved), moved->toString());
+                expect (moved->getCentre().getDistanceFrom (main.getCentre()) <= 1, moved->toString());
+                expectEquals (moved->getWidth(), 1300);
+
+                // A display smaller than the minimum: the minimum wins, top-left on the display.
+                expect (clampWindowBounds (R (0, 0, 1280, 800), juce::Array<R> { R (0, 0, 1024, 600) }, minSize)
+                        == std::optional<R> (R (0, 0, 1100, 700)));
+
+                // No display at all.
+                expect (! clampWindowBounds (R (0, 0, 1280, 800), {}, minSize).has_value());
             }
         }
     };

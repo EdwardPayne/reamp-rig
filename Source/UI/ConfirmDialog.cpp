@@ -69,12 +69,17 @@ namespace rf::ui
 
     bool ConfirmDialog::keyPressed (const juce::KeyPress& key)
     {
+        if (! isVisible())
+            return false;
+
         if (key == juce::KeyPress::escapeKey)
             dismiss (false);
         else if (key == juce::KeyPress::returnKey)
             dismiss (true);
+        else if (key.getModifiers().isCommandDown())
+            return false;   // cmd-Q, cmd-W and friends still reach the app; the list never sees them
 
-        return true;    // modal: nothing reaches the window behind it
+        return true;    // modal: Space, Delete, L, R... never reach the window behind it
     }
 
     juce::TextLayout ConfirmDialog::layoutText (const juce::String& text, int width, juce::Colour c) const

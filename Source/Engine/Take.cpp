@@ -75,7 +75,10 @@ namespace rf::engine
         job.onWritten = spec.onWritten;
 
         if (const auto error = writer->start (std::move (job)); error.isNotEmpty())
+        {
+            result.writeFailed = true;      // the destination cannot take the file
             return error;
+        }
 
         if (! engine->startTake (spec.source, recordLength, recordStream))
         {
@@ -120,6 +123,7 @@ namespace rf::engine
                 result.length = r->samplesWritten;
                 result.peak = r->peak;
                 result.paddedSamples = r->paddedSamples;
+                result.writeFailed = r->writeFailed;
                 result.silent = r->peak < silenceThreshold;
                 result.clipped = r->peak >= DuplexEngine::clipLevel;
                 phase = Phase::done;

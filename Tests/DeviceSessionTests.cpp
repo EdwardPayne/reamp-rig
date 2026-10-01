@@ -293,6 +293,88 @@ namespace rf::test
                 expectEquals (r.config.outputChannel, 2);
                 expect (! r.config.isSplit());
             }
+
+            beginTest ("the saved device comes back: presence, what runs, and when to reopen");
+            {
+                FakeAudioDevice fake;
+                addStudioDevices (fake, true);
+                DeviceSession session (fake);
+                const auto apollo = apolloConfig();
+
+                const auto apolloDevice = fake.types[0].devices.back();
+
+                auto unplug = [&fake]
+                {
+                    auto& list = fake.types[0].devices;
+                    list.erase (std::remove_if (list.begin(), list.end(), [] (const auto& d) { return d.name == "Apollo Twin"; }),
+                                list.end());
+                };
+
+                auto plugIn = [&fake, apolloDevice] { fake.types[0].devices.push_back (apolloDevice); };
+
+                expect (session.isPresent (apollo));
+                expect (session.open (apollo, true).ok);
+                expect (DeviceSession::runs (fake.getStatus(), apollo));
+
+                // Split pair: both names must be listed.
+                DeviceConfig split;
+                split.typeName = "CoreAudio";
+                split.outputDevice = "MacBook Pro Speakers";
+                split.inputDevice = "MacBook Pro Microphone";
+                expect (session.isPresent (split));
+                expect (! DeviceSession::runs (fake.getStatus(), split));
+                split.inputDevice = "USB Mic";
+                expect (! session.isPresent (split));
+
+                // Nothing named (first launch) is never "present": nothing to come back.
+                DeviceConfig none;
+                none.typeName = "CoreAudio";
+                expect (! session.isPresent (none));
+
+                // Another driver type is not the same device.
+                auto asio = apollo;
+                asio.typeName = "ASIO";
+                expect (! session.isPresent (asio));
+
+                ReconnectWatch watch;
+                watch.reset (session.isPresent (apollo));
+                expect (! watch.update (true, true, true), "running and present: nothing to do");
+
+                // Unplugged while open: the app closes it (here: the status says not open).
+                unplug();
+                fake.close();
+                expect (! session.isPresent (apollo));
+                expect (! watch.update (session.isPresent (apollo), false, true));
+                expect (! watch.update (false, false, true), "still gone");
+
+                // Plugged back in while a take records: remembered, not reopened yet.
+                plugIn();
+                expect (session.isPresent (apollo));
+                expect (! watch.update (true, false, false));
+                expect (watch.isPending());
+                expect (! watch.update (true, false, false));
+
+                // Free again: reopen once.
+                expect (watch.update (true, false, true));
+                expect (! watch.isPending());
+                expect (session.open (apollo, true).ok);
+                expect (! watch.update (true, true, true), "reopened: nothing more to do");
+
+                // Missing at launch (another device opened as a fallback), then plugged in.
+                unplug();
+                ReconnectWatch launch;
+                launch.reset (session.isPresent (apollo));
+                expect (! launch.update (false, false, true));
+                plugIn();
+                expect (launch.update (true, false, true), "the saved device appeared after launch");
+
+                // Back, but the user already picked it again by hand: nothing to do.
+                unplug();
+                expect (! launch.update (false, false, true));
+                plugIn();
+                expect (! launch.update (true, true, true));
+                expect (! launch.isPending());
+            }
         }
     };
 

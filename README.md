@@ -3,16 +3,139 @@
 Batch re-amping of guitar DI tracks through a hardware amp via an audio interface.
 Desktop app, C++20 + JUCE 9.0.3 (fetched automatically), CMake.
 
-Status: **phase 5 (sync)**. Files and folders can be dropped or added, are scanned
-and listed grouped by folder with multi-select and L/R choice, and the selected file's waveform
-is shown with zoom and an audition start marker. The audio device, sample rate, buffer size and
-the output/input channels (with the driver's channel names) are chosen in the AUDIO section and
-remembered; input/output meters, the output level and Audition (Space) work. **Start** records
-every queued file through the amp: each file is played out of the output channel and the input
-is recorded in the same audio callback, latency-compensated to exactly the source's length (plus
-an optional tail), and written as WAV next to the source or into one folder. **Sync** measures
-the interface's real round-trip latency per device configuration; files recorded without a
-measurement fall back to the driver's estimate and are marked "not calibrated" (NC).
+Status: **version 0.1.0, all six phases done** (phase 6 "polish" on 2026-10-01). What is still
+open (mostly things that need the Apollo or a manual mouse pass) is listed in
+`docs/PROGRESS.md` under "Open issues".
+
+## Using Reamp Rig
+
+Reamp Rig plays each DI file out of one output channel of your interface into the amp, records
+the amp back on one input channel, and writes the result sample-aligned and exactly as long as
+the source.
+
+### 1. Setup
+
+1. Open the app (`Reamp Rig.app`; the first time macOS asks for microphone access: allow it,
+   the app cannot record any input otherwise).
+2. **AUDIO**: pick the driver, the interface as output **and** input device, the sample rate and
+   buffer, the **Output** channel that feeds the amp and the **Input** channel the amp comes back
+   on (the names are the interface's own). Set **Output level** low and press **Audition**
+   (Space) to hear the selected file through the amp; watch "Peak at output" and the meters.
+3. Drop DI files or folders on the window (or **Add files…** / **Add folder…**). Folders are
+   grouped by location; with **Include subfolders** on (OPTIONS) subfolders are scanned too,
+   except folders named like the DESTINATION subfolder (`Reamped`): those hold results. Click
+   **L** / **R** on stereo files to choose the channel that goes to the amp.
+
+Everything you set is remembered, including the window's size and position. When the interface
+is unplugged the app stops (a running batch pauses) and opens it again by itself as soon as it
+is back.
+
+### 2. Sync (latency calibration)
+
+Do this once per interface setup, before the first batch, and again whenever the AUDIO section
+says "NOT SYNCED" (top-bar chip):
+
+1. **Bypass the amp.** Connect the chosen output channel directly to the chosen input channel
+   with a cable (line out into line in; no amp, no pedals).
+2. Leave **Sync level** at -12 dBFS (lower it if the result says "clipped", raise it or the
+   interface's input gain if it says "level too low").
+3. Press **Sync**. A click and a short sweep are played and recorded five times (about six
+   seconds; the cells under the readouts fill as it goes, Stop cancels). The SYNC section then
+   shows the round trip (`556 smp · 11.6 ms`), the returned peak, the confidence (high / medium /
+   low; hover for the details) and the date, next to the driver's own figure for reference. The
+   top-bar chip turns green with the measured value.
+4. **Reconnect the amp** (output into the amp, the amp's mic or DI into the input) and run the
+   batch.
+
+A measurement belongs to the driver, the input and output device, the sample rate and the buffer
+size; changing any of them shows "NOT SYNCED" until that configuration is measured (an earlier
+measurement comes back when you switch back). The batch switches the device to each file's sample
+rate, so measure every rate your files use: set the rate in the AUDIO section, press Sync, repeat.
+If the batch would run in a configuration without a measurement, **Start** asks first ("Not synced
+for this configuration", listing them); **Start anyway** uses the driver's estimate and marks those
+files **NC**. Failures (nothing came back, no clear peak, level too low, clipped, not repeatable,
+dropouts) are explained in the SYNC section and the status bar, and never replace a good
+measurement. With the built-in speakers and microphone Sync measures through the room: it works at
+a low level but is "not sample-synchronized" (separate devices), so expect medium or low
+confidence.
+
+**Forget** (next to Sync) deletes the measurement of the current configuration after asking, for
+example after re-cabling; other configurations keep theirs. A device that stops during Sync ends
+the measurement at once; nothing is stored.
+
+### 3. Batch
+
+1. Add files, pick the L/R channel of stereo files, set the AUDIO section (one interface for
+   real work) and the output level (watch "Peak at output").
+2. DESTINATION: **Subfolder next to source** (default, `<source folder>/Reamped/`) or **Single
+   output folder** (choose it; "Mirror folder structure" recreates the folders below the folder
+   you added, e.g. `<output>/Session A/Takes/`). Prefix and suffix make
+   `<prefix><name><suffix>.wav` (example line underneath); OPTIONS "Append channel tag" adds
+   `_L`/`_R` for stereo sources. Format WAV 16 / 24 / 32-bit float at the source's sample rate.
+   Collision: Auto-number (`name (2).wav`), Overwrite or Skip. Tail (ms) records that much longer.
+3. **Start** processes every Queued file top to bottom (Done files are skipped until you reset
+   them: right-click > Reset status). Between two files the batch waits the **Pause between
+   files** (OPTIONS, default 2 s) so the amp's and a reverb's tail dies out; the status line
+   counts down ("File 4 of 7 — next in 2 s") and the ETA includes the waits. **Pause** stops at
+   once and records the interrupted file again from its start on **Resume** (after one more
+   pause); **Skip** skips the current file (during a wait: the file about to start); **Stop**
+   ends the batch (the current file stays queued). Each result is written under a hidden
+   temporary name and renamed when complete, so an interrupted take never leaves a half-written
+   file.
+4. The list shows status, progress and warning badges: **NC** not calibrated (latency estimated
+   because the configuration had no sync measurement),
+   **RS** resampled (the device could not run at the file's rate), **XR** dropout, **SIL** recorded
+   silence?, **CLIP** clipped (hover for details). "Redo files with warnings" (right-click, or the
+   header button) queues the files with dropouts, silence or clipping again, and NC files whose
+   configuration has been synced since.
+5. The device is switched to each file's sample rate when it supports it (consecutive files with
+   the same rate need no switch) and restored afterwards; otherwise the file is resampled there
+   and back with a high-quality resampler and marked RS.
+
+**Sidecar log.** Every batch writes `Reamp Rig batch <date> <time>.txt` into the destination
+folder of its first file (the output folder itself in single-folder mode): device, rate, buffer,
+channels, level, latency used (measured or estimated), format and naming, then one entry per file
+(source → output, channel, samples, device rate, gain, latency, peak, warnings) as it finishes.
+
+### 4. Output
+
+- Next to each source in `Reamped/` (default) or in one output folder you choose, named
+  `<prefix><name><suffix>.wav` (default suffix `_reamp`), WAV 16 / 24 / 32-bit float at the
+  source's sample rate, mono.
+- One plain-text log per batch in the destination: `Reamp Rig batch <date> <time>.txt`, with the
+  app version, the device, the latency used and every file's result and warnings.
+
+### 5. Warnings and badges
+
+| Badge | Meaning | What to do |
+|---|---|---|
+| **NC** | Not calibrated: no sync measurement for that device configuration, so the driver's latency estimate was used (may be off by a few ms) | Bypass the amp, press Sync for that rate, then "Redo files with warnings" |
+| **RS** | Resampled: the device could not run at the file's rate; played and recorded at another rate and converted back (high quality) | Nothing, or use an interface that supports the rate |
+| **XR** | Dropout during the take (xrun, callback gap or a full record buffer) | "Redo files with warnings"; close other apps or raise the buffer size |
+| **SIL** | Recorded silence? (peak below -60 dBFS) | Check the amp, cables and the input channel, then redo |
+| **CLIP** | The recording reached full scale | Lower the amp's output or the interface's input gain, then redo |
+| **NOT SYNCED** (top bar) | The current configuration has no measurement | Sync, or Start anyway (files get NC) |
+| **ERROR** (status) | The file could not be loaded or written; hover the status for the reason | Fix the cause, right-click > Reset status, Start |
+
+Status-bar messages with a badge are warnings (amber) or errors (orange-red); hover the status bar
+for details. A full disk or an unwritable output folder pauses the batch and says what to do; an
+unplugged interface pauses it until it is back (then press Resume).
+
+### 6. Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| Space | Audition the selected file / stop (not while a batch runs or Sync measures) |
+| L / R | Use the left / right channel of the selected stereo files |
+| Delete or Backspace | Remove the selected files from the list |
+| Cmd-A (Ctrl-A on Windows) | Select every visible file (files in collapsed folders are never selected) |
+| Up / Down (Shift extends) | Move the selection |
+| Return / Escape | Confirm / cancel the dialog (it ignores every other key) |
+
+The list must have the keyboard focus for L, R, Delete and Cmd-A (click a file first). Collapsing
+a folder deselects its files, so bulk actions never touch rows you cannot see.
+
+# Development
 
 ## Requirements
 
@@ -85,71 +208,13 @@ The app can render its own window (including open popup menus and tooltips) to a
 This works without granting the terminal screen-recording permission:
 
 ```sh
-"build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig" --snapshot="$PWD/docs/phase1.png"
+"build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig" --snapshot="$PWD/docs/phase6-empty.png"
 ```
 
 The native macOS title bar is not part of the snapshot. It waits until scans and the waveform
 have finished. Combine it with `--open=` and the development flags `--select=<file name>`
 (repeatable, first one is shown in the waveform panel), `--audition-at=<seconds>` and
 `--view=<start>:<end>` to capture a populated window (see `Source/App/CommandLine.h`).
-
-## Sync (latency calibration)
-
-Do this once per interface setup, before the first batch, and again whenever the AUDIO section
-says "NOT SYNCED" (top-bar chip):
-
-1. **Bypass the amp.** Connect the chosen output channel directly to the chosen input channel
-   with a cable (line out into line in; no amp, no pedals).
-2. Leave **Sync level** at -12 dBFS (lower it if the result says "clipped", raise it or the
-   interface's input gain if it says "level too low").
-3. Press **Sync**. A click and a short sweep are played and recorded five times (about six
-   seconds; the cells under the readouts fill as it goes, Stop cancels). The SYNC section then
-   shows the round trip (`556 smp · 11.6 ms`), the returned peak, the confidence (high / medium /
-   low; hover for the details) and the date, next to the driver's own figure for reference. The
-   top-bar chip turns green with the measured value.
-4. **Reconnect the amp** (output into the amp, the amp's mic or DI into the input) and run the
-   batch.
-
-A measurement belongs to the driver, the input and output device, the sample rate and the buffer
-size; changing any of them shows "NOT SYNCED" until that configuration is measured (an earlier
-measurement comes back when you switch back). The batch switches the device to each file's sample
-rate, so measure every rate your files use: set the rate in the AUDIO section, press Sync, repeat.
-If the batch would run in a configuration without a measurement, **Start** asks first ("Not synced
-for this configuration", listing them); **Start anyway** uses the driver's estimate and marks those
-files **NC**. Failures (nothing came back, no clear peak, level too low, clipped, not repeatable,
-dropouts) are explained in the SYNC section and the status bar, and never replace a good
-measurement. With the built-in speakers and microphone Sync measures through the room: it works at
-a low level but is "not sample-synchronized" (separate devices), so expect medium or low
-confidence.
-
-## Batch processing
-
-1. Add files, pick the L/R channel of stereo files, set the AUDIO section (one interface for
-   real work) and the output level (watch "Peak at output").
-2. DESTINATION: **Subfolder next to source** (default, `<source folder>/Reamped/`) or **Single
-   output folder** (choose it; "Mirror folder structure" recreates the folders below the folder
-   you added, e.g. `<output>/Session A/Takes/`). Prefix and suffix make
-   `<prefix><name><suffix>.wav` (example line underneath); OPTIONS "Append channel tag" adds
-   `_L`/`_R` for stereo sources. Format WAV 16 / 24 / 32-bit float at the source's sample rate.
-   Collision: Auto-number (`name (2).wav`), Overwrite or Skip. Tail (ms) records that much longer.
-3. **Start** processes every Queued file top to bottom (Done files are skipped until you reset
-   them: right-click > Reset status). **Pause** stops at once and records the interrupted file
-   again from its start on **Resume**; **Skip** skips the current file; **Stop** ends the batch
-   (the current file stays queued). Each result is written under a hidden temporary name and
-   renamed when complete, so an interrupted take never leaves a half-written file.
-4. The list shows status, progress and warning badges: **NC** not calibrated (latency estimated
-   because the configuration had no sync measurement),
-   **RS** resampled (the device could not run at the file's rate), **XR** dropout, **SIL** recorded
-   silence?, **CLIP** clipped (hover for details). "Redo files with warnings" (right-click, or the
-   header button) queues the files with dropouts, silence or clipping again.
-5. The device is switched to each file's sample rate when it supports it (consecutive files with
-   the same rate need no switch) and restored afterwards; otherwise the file is resampled there
-   and back with a high-quality resampler and marked RS.
-
-**Sidecar log.** Every batch writes `Reamp Rig batch <date> <time>.txt` into the destination
-folder of its first file (the output folder itself in single-folder mode): device, rate, buffer,
-channels, level, latency used (measured or estimated), format and naming, then one entry per file
-(source → output, channel, samples, device rate, gain, latency, peak, warnings) as it finishes.
 
 ## Testing with the built-in mic and speakers
 
@@ -161,7 +226,7 @@ two devices run on independent clocks. Use one interface (e.g. the Apollo) for r
 Microphone access: macOS asks once. Until the prompt is answered the app does not open any
 audio device that has inputs (CoreAudio would block the app until then), so answer it first.
 If access is denied, playback and audition still work but every input is silent; allow Reamp
-Forge in System Settings > Privacy & Security > Microphone and restart the app. When the app is
+Rig in System Settings > Privacy & Security > Microphone and restart the app. When the app is
 started from a terminal, macOS asks on behalf of the terminal app instead.
 
 Set the output level low before the first Audition: it plays the selected file's channel through
@@ -187,8 +252,14 @@ prints every repeat and the result, stores it, exits 0 when it matches the loop'
 measures those rates, `--sync-level=<dBFS>` sets the level for the run; with `--batch-check` the
 batch runs afterwards in the same process), `--virtual-reported-latency=<n>` (the virtual device
 reports a wrong driver latency), `--settings-file=<path>` (use another settings file, so checks do
-not touch yours) and `--press-start` (presses Start after loading, e.g. to snapshot the "Not
-synced" dialog). Examples without touching any hardware:
+not touch yours), `--press-start` (presses Start after loading, e.g. to snapshot the "Not
+synced" dialog), `--press-forget` (opens the Forget confirmation), `--window-bounds=x,y,w,h`
+(moves/resizes the window after launch as if dragged; it is then remembered) and
+`--virtual-unplug=<at>:<for>` (the virtual interface disappears `<at>` seconds after launch and
+comes back `<for>` seconds later; with `--batch-check` the batch pauses, the device reopens by
+itself and the check resumes). The pause between files is a normal setting
+(`pauseBetweenFilesSeconds` in the settings file, OPTIONS in the app). Examples without touching
+any hardware:
 
 ```sh
 APP="build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig"
@@ -198,15 +269,34 @@ APP="build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig"
 "$APP" --settings-file=/tmp/check.settings --open="$HOME/DI/Session A" --output-level=0 --virtual-loopback=300 \
        --virtual-reported-latency=100 --virtual-speed=8 --sync-check --sync-check-rates=44100,96000 \
        --batch-check=/tmp/reamp-check
+"$APP" --settings-file=/tmp/check.settings --open="$HOME/DI/Session A" --output-level=0 --virtual-speed=4 \
+       --virtual-unplug=4:2 --batch-check=/tmp/reamp-check
 ```
 
 See `Source/App/CommandLine.h` for details.
+
+## Known limits
+
+- Windows is untested: it is expected to compile (ASIO needs `JUCE_ASIO=1` and Steinberg's SDK),
+  but driver-type switching, ASIO/WASAPI and Sync there have never run.
+- Resampled takes (RS) lose source content above about 0.447 of the lower sample rate
+  (band-limiting by the high-quality resampler; real DI rarely has any).
+- The batch keeps the played channel of the current and the next file in memory, audition the
+  lead file's (4 bytes per sample; files over about 1 billion samples are refused).
+- Dropout detection uses wall-clock callback spacing; on a heavily loaded machine with tiny
+  buffers, scheduling jitter can be reported as a dropout (XR, warning only).
+- At the maximum waveform zoom (50 ms visible) the thumbnail (64 samples per point) looks stepped.
+- When the app is started from a terminal, macOS asks for microphone access on behalf of the
+  terminal app.
+- Built-in speakers + microphone are two devices with separate clocks: fine for trying the app,
+  "not sample-synchronized" for real work.
 
 ## Layout
 
 ```
 CMakeLists.txt
 Assets/Fonts/     JetBrains Mono + Inter (Regular/Medium/Bold) and their OFL licences
+Assets/Icon/      app icon PNGs (16-1024 px) and make_icon.py, which generates them
 Source/Main.cpp   application entry point
 Source/App/       main window, root component, Settings, AudioController, BatchController,
                   BatchLog, OutputOptions, SyncController, SyncPlan, microphone permission,
@@ -218,7 +308,7 @@ Source/Engine/    AudioDeviceInterface, JuceAudioDevice, DeviceSession, DuplexEn
 Source/Model/     FileItem, FileTree, FolderScanner, BatchQueue, OutputNaming
 Tests/            JUCE UnitTest runner and tests (FolderScanner, FileTree, FileTreeView, Settings,
                   DeviceSession, DuplexEngine, SourceLoader, Resampler, Loopback end to end, Take,
-                  OutputNaming, BatchQueue, Sync) and a fake audio device
+                  OutputNaming, BatchQueue, Sync, Keyboard) and a fake audio device
 ```
 
 See `ARCHITECTURE.md` for the thread and data-flow design, `PROMPT.md` for the full

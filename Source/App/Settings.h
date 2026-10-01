@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_data_structures/juce_data_structures.h>
+#include <juce_graphics/juce_graphics.h>
 
 #include "../Engine/AudioDeviceInterface.h"
 #include "../Engine/SyncMeasurement.h"
@@ -88,6 +89,14 @@ namespace rf::app
         model::CollisionPolicy getCollisionPolicy() const;
         void setCollisionPolicy (model::CollisionPolicy);
 
+        /** Pause between files (phase 6, owner request): after a file is written the batch
+            waits this long before the next take, so amp and reverb tails die out.
+            0..60 s, default 2 s, tenths of a second. */
+        static constexpr double maxPauseBetweenFilesSeconds = 60.0;
+        static constexpr double defaultPauseBetweenFilesSeconds = 2.0;
+        double getPauseBetweenFilesSeconds() const;
+        void setPauseBetweenFilesSeconds (double);
+
         /** All naming fields in one struct. */
         model::NamingOptions getNamingOptions() const;
 
@@ -113,6 +122,19 @@ namespace rf::app
         /** Every valid entry, in stored order. */
         std::vector<std::pair<engine::SyncKey, engine::SyncMeasurement>> getSyncMeasurements() const;
 
+        /** Deletes the measurement for `key` ("Forget" in the SYNC section). Returns false if
+            there was none. */
+        bool removeSyncMeasurement (const engine::SyncKey&);
+
+        //==============================================================================
+        // Window (phase 6, PROMPT.md 3.7 and section 5)
+
+        /** The main window's last bounds (screen coordinates, without the title bar), or
+            nothing when none were saved or the saved text does not parse. Not clamped: see
+            clampWindowBounds. */
+        std::optional<juce::Rectangle<int>> getWindowBounds() const;
+        void setWindowBounds (juce::Rectangle<int>);
+
         //==============================================================================
         /** Writes pending changes now (also done automatically shortly after each change). */
         void save();
@@ -122,9 +144,19 @@ namespace rf::app
 
     private:
         static juce::PropertiesFile::Options makeOptions();
+        void writeSyncMeasurements (const std::vector<std::pair<engine::SyncKey, engine::SyncMeasurement>>&);
 
         std::unique_ptr<juce::PropertiesFile> file;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Settings)
     };
+
+    /** Fits saved window bounds onto the screen (PROMPT.md section 5: min 1100 x 700):
+        the size is at least `minSize` and at most the display's usable area; a window that
+        is not on any display (unplugged monitor, garbage) moves onto the display it overlaps
+        most, else the first (main) one, keeping as much of its position as fits. Pure, so it
+        is unit tested without a screen. Returns nothing when there is no display. */
+    std::optional<juce::Rectangle<int>> clampWindowBounds (juce::Rectangle<int> saved,
+                                                           const juce::Array<juce::Rectangle<int>>& displayUserAreas,
+                                                           juce::Point<int> minSize);
 }

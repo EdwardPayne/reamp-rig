@@ -198,6 +198,10 @@ namespace rf::app
         auto wanted = selected;
         change (wanted);
         applyConfig (wanted, true);
+
+        // The user's choice is the device to come back to.
+        preferred = device.getStatus().isOpen ? selected : wanted;
+        reconnect.reset (session.isPresent (preferred));
     }
 
     //==============================================================================
@@ -249,7 +253,19 @@ namespace rf::app
 
         // Never persist at startup: a fallback (saved device missing) must not overwrite the
         // user's choice, so the device is used again as soon as it is back.
+        preferred = wanted;
+        reconnect.reset (session.isPresent (preferred));
         applyConfig (wanted, false);
+
+        // First launch (nothing saved): come back to whatever was chosen for the user.
+        if (preferred.outputDevice.isEmpty() && preferred.inputDevice.isEmpty() && device.getStatus().isOpen)
+        {
+            preferred = selected;
+            reconnect.reset (true);
+        }
+
+        if (! reconnect.isPending() && ! session.isPresent (preferred) && preferred.outputDevice.isNotEmpty())
+            juce::Logger::writeToLog ("Audio: " + preferred.outputDevice + " is not connected; it is opened by itself once it is");
     }
 
     void AudioController::applyConfig (const engine::DeviceConfig& wanted, bool persist)
@@ -461,20 +477,66 @@ namespace rf::app
 
         if (deviceWasOpen && ! status.isOpen)
         {
-            stopAudition();
-
-            const auto reason = status.lastError.isNotEmpty() ? status.lastError : juce::String ("device disconnected or stopped");
-            juce::Logger::writeToLog ("Audio device stopped: " + reason);
-            views.statusBar.setMessage ("Audio device stopped: " + reason, Tone::warning);
-            refreshDeviceUi();
-
-            if (onDeviceStopped != nullptr)
-                onDeviceStopped();
-
+            deviceLost();
             return;
         }
 
         refreshDeviceUi();
+        checkReconnect();
+    }
+
+    void AudioController::deviceLost()
+    {
+        const auto status = device.getStatus();
+        const auto name = selected.outputDevice.isNotEmpty() ? selected.outputDevice : selected.inputDevice;
+
+        stopAudition();
+
+        const auto reason = status.lastError.isNotEmpty() ? status.lastError : juce::String ("disconnected or stopped");
+        juce::Logger::writeToLog ("Audio device stopped: " + name + ": " + reason);
+        views.statusBar.setMessage ("Audio device stopped: " + name + " (" + reason + "). It reopens by itself when it is "
+                                        "back; or pick another device in AUDIO.",
+                                    Tone::warning,
+                                    "Check the cable and the interface's power. Nothing has to be restarted: as soon as "
+                                    "the device is listed again it is opened with the same settings.");
+        refreshDeviceUi();
+
+        // The batch pauses (its message replaces this one) and Sync stops; both say what to do.
+        if (onDeviceStopped != nullptr)
+            onDeviceStopped();
+
+        if (onSyncDeviceStopped != nullptr)
+            onSyncDeviceStopped();
+
+        checkReconnect();
+    }
+
+    void AudioController::checkReconnect()
+    {
+        if (applying || waitingForPermission)
+            return;
+
+        const auto present = session.isPresent (preferred);
+        const auto running = engine::DeviceSession::runs (device.getStatus(), preferred);
+        const auto canReopen = ! syncActive && ! (isBatchRunning != nullptr && isBatchRunning());
+
+        if (! reconnect.update (present, running, canReopen))
+            return;
+
+        const auto name = preferred.outputDevice.isNotEmpty() ? preferred.outputDevice : preferred.inputDevice;
+        juce::Logger::writeToLog ("Audio: " + name + " is back; reopening it");
+        applyConfig (preferred, false);
+
+        const auto now = device.getStatus();
+
+        if (! now.isOpen)
+            return;   // applyConfig has said why
+
+        if (views.statusBar.getTone() != Tone::error)
+            views.statusBar.setMessage (name + " is back and open again: " + describeDevice (now));
+
+        if (onDeviceReopened != nullptr)
+            onDeviceReopened (describeDevice (now));
     }
 
     //==============================================================================
@@ -616,7 +678,8 @@ namespace rf::app
 
         if (! status.isOpen || selected.outputChannel < 0)
         {
-            views.statusBar.setMessage ("Cannot audition: no output device is open", Tone::warning);
+            views.statusBar.setMessage ("Cannot audition: no output channel is open. Pick an output device and channel in AUDIO.",
+                                        Tone::warning);
             return false;
         }
 
@@ -677,6 +740,18 @@ namespace rf::app
     //==============================================================================
     void AudioController::timerCallback()
     {
+        // Slow poll (every 2 s) in case a device-list notification was missed: a device that
+        // vanished, or the saved device that came back.
+        if (++slowTicks >= 2 * uiRefreshHz)
+        {
+            slowTicks = 0;
+
+            if (! applying && deviceWasOpen && ! device.getStatus().isOpen)
+                deviceLost();
+            else
+                checkReconnect();
+        }
+
         const auto snap = duplex.poll();
 
         views.audio.getOutputMeter().push (snap.outputPeak, snap.outputClipped);
@@ -740,9 +815,13 @@ namespace rf::app
         if (! status.isOpen)
         {
             views.topBar.setSyncStatus ("No device", colour::muted, "No audio device is open.");
+            s.setHasMeasurement (false);
 
             for (auto* r : { &measured, &peak, &confidence, &date, &driver })
                 r->setValue (emDash());
+
+            if (onSyncUiRefreshed != nullptr)
+                onSyncUiRefreshed();
 
             return;
         }
@@ -756,7 +835,10 @@ namespace rf::app
 
         driver.setValue ("in " + juce::String (status.inputLatencySamples) + " + out " + juce::String (status.outputLatencySamples) + " smp");
 
-        if (const auto m = findSync (status))
+        const auto stored = findSync (status);
+        s.setHasMeasurement (stored.has_value());
+
+        if (const auto& m = stored)
         {
             const auto value = format::latency (m->samples, m->ms);
             const auto difference = m->samples - driverTotal;
@@ -777,7 +859,7 @@ namespace rf::app
                                                                                       : std::nullopt);
             confidence.setTooltip ("Peak-to-sidelobe ratio " + juce::String (m->peakToSidelobeDb, 1) + " dB; "
                                    + juce::String (m->repeatsUsed) + " of " + juce::String (m->repeatsTotal)
-                                   + ui::utf8 (" repeats within Â±") + "1 sample. High: every repeat agrees and the ratio is at "
+                                   + ui::utf8 (" repeats within \xc2\xb1") + "1 sample. High: every repeat agrees and the ratio is at "
                                      "least 20 dB. Medium: all but one agree and at least 12 dB. Low: otherwise.");
             date.setValue (format::dateTime (m->date));
             driver.setTooltip ("Input + output latency reported by the driver: " + driverText + ". Reference only: the "
@@ -801,6 +883,9 @@ namespace rf::app
             driver.setTooltip ("Input + output latency reported by the driver: " + driverText
                                + ". Used as an estimate until this configuration is measured.");
         }
+
+        if (onSyncUiRefreshed != nullptr)
+            onSyncUiRefreshed();
     }
 
     //==============================================================================
@@ -817,10 +902,10 @@ namespace rf::app
             return refuse ("waiting for microphone access (answer the macOS prompt)");
 
         if (! status.isOpen)
-            return refuse ("no audio device is open");
+            return refuse ("no audio device is open. Connect the interface (it opens by itself) or pick a device in AUDIO.");
 
         if (selected.outputChannel < 0 || status.config.outputChannel < 0)
-            return refuse ("no output channel is open");
+            return refuse ("the output device has no output channel open. Pick an output device and channel in AUDIO.");
 
         if (outputOnly)
             return refuse ("the input is off (--no-input)");
@@ -832,7 +917,7 @@ namespace rf::app
         }
 
         if (status.config.inputChannel < 0)
-            return refuse ("no input channel is open");
+            return refuse ("the input device has no input channel open. Pick an input device and channel in AUDIO.");
 
         return true;
     }

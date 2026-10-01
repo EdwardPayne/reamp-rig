@@ -29,6 +29,7 @@ namespace rf::ui
         {
             juce::String label;             // empty for no label
             juce::Component* component = nullptr;
+            int width = 0;                  // fixed width in px; 0 = share the rest equally
         };
 
         /** Adds a row of fields. The component must be owned by the subclass. */

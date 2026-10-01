@@ -31,7 +31,9 @@ namespace rf::app
         level.onValueChange = [this] { settings.setSyncLevelDb ((float) views.sync.getLevelSlider().getValue()); };
 
         views.sync.getSyncButton().onClick = [this] { toggle(); };
+        views.sync.getForgetButton().onClick = [this] { forget(); };
         audio.onSyncSnapshot = [this] (const engine::EngineSnapshot& snap) { handleSnapshot (snap); };
+        audio.onSyncDeviceStopped = [this] { deviceStopped(); };
 
         refreshControls();
     }
@@ -40,8 +42,10 @@ namespace rf::app
     {
         alive->store (false);
         audio.onSyncSnapshot = nullptr;
+        audio.onSyncDeviceStopped = nullptr;
         views.sync.getLevelSlider().onValueChange = nullptr;
         views.sync.getSyncButton().onClick = nullptr;
+        views.sync.getForgetButton().onClick = nullptr;
 
         if (measurer.isRunning())
         {
@@ -175,6 +179,105 @@ namespace rf::app
             button.setTooltip (tooltip);
 
         views.sync.getLevelSlider().setEnabled (! measuring && ! audio.isBatchActive());
+
+        auto& forgetButton = views.sync.getForgetButton();
+        const auto canForget = ! measuring && ! audio.isBatchActive() && views.sync.getHasMeasurement();
+
+        if (forgetButton.isEnabled() != canForget)
+            forgetButton.setEnabled (canForget);
+
+        const auto forgetTip = canForget ? juce::String ("Delete the stored measurement for the current device configuration "
+                                                         "(asks first). Other configurations keep theirs.")
+                             : measuring ? juce::String ("Forget is off while Sync measures.")
+                             : audio.isBatchActive() ? juce::String ("Forget is off while the batch runs.")
+                                                     : juce::String ("Nothing to forget: the current device configuration "
+                                                                     "has no stored measurement.");
+
+        if (forgetButton.getTooltip() != forgetTip)
+            forgetButton.setTooltip (forgetTip);
+    }
+
+    //==============================================================================
+    void SyncController::forget()
+    {
+        if (measurer.isRunning() || audio.isBatchActive() || views.confirm.isShowing())
+            return;
+
+        const auto status = audio.getDeviceStatus();
+        const auto m = audio.findSync (status);
+
+        if (! m.has_value())
+        {
+            views.statusBar.setMessage ("Nothing to forget: no measurement is stored for this configuration");
+            return;
+        }
+
+        const auto key = engine::SyncKey::from (status);
+        const auto where = audio.describeKey (key);
+
+        ui::ConfirmDialog::Content c;
+        c.title = "Forget the sync measurement?";
+        c.intro = "The stored round trip for this device configuration is deleted:";
+        c.items = { where, format::latency (m->samples, m->ms) + dot() + "confidence " + engine::toString (m->confidence)
+                               + dot() + format::dateTime (m->date) };
+        c.note = "Takes in this configuration then use the driver's estimate and are marked NC until you press Sync "
+                 "again. Measurements of other configurations are kept.";
+        c.confirmText = "Forget";
+        c.cancelText = "Cancel";
+
+        views.confirm.show (c, [this, key, where] (bool confirmed)
+        {
+            if (! confirmed)
+            {
+                views.statusBar.setMessage ("Kept the measurement for " + where);
+                return;
+            }
+
+            if (settings.removeSyncMeasurement (key))
+            {
+                settings.save();
+                juce::Logger::writeToLog ("Sync: forgot the measurement for " + where);
+                audio.refreshSyncUi();
+                views.statusBar.setMessage ("Forgot the measurement for " + where + ". Bypass the amp and press Sync to "
+                                            "measure again.", Tone::warning);
+
+                if (onStoreChanged != nullptr)
+                    onStoreChanged();
+            }
+
+            refreshControls();
+        });
+    }
+
+    void SyncController::deviceStopped()
+    {
+        if (! measurer.isRunning())
+            return;
+
+        measurer.cancel();
+        unlock();
+        views.sync.setMeasuring (false);
+
+        const auto where = audio.describeKey (measuringKey);
+        const auto text = juce::String ("Sync stopped: the audio device stopped or was disconnected. Nothing was stored.");
+        views.sync.setFailure ("Sync failed: the device stopped. Nothing was stored.",
+                               "The device of " + where + " stopped during the measurement. It reopens by itself when it is "
+                               "back; then press Sync again.",
+                               colour::error);
+        views.statusBar.setMessage (text + " It reopens by itself when it is back; then press Sync again.", Tone::error);
+        juce::Logger::writeToLog ("Sync failed (device stopped) for " + where);
+
+        if (check.active)
+        {
+            check.allOk = false;
+            printCheck ("FAIL: the device stopped during the measurement");
+            ++check.index;
+            juce::MessageManager::callAsync ([this, flag = alive]
+            {
+                if (flag->load())
+                    checkNext();
+            });
+        }
     }
 
     void SyncController::finished()
@@ -202,6 +305,9 @@ namespace rf::app
             const auto& m = r.measurement;
             settings.setSyncMeasurement (measuringKey, m);
             settings.save();
+
+            if (onStoreChanged != nullptr)
+                onStoreChanged();
 
             unlock();
             views.sync.setMeasuring (false);

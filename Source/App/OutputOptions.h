@@ -28,6 +28,7 @@ namespace rf::app
         model::NamingOptions getNamingOptions() const;
         int getBitsPerSample() const;
         int getTailMs() const;
+        double getPauseBetweenSeconds() const;
 
         /** The file whose name the example line shows (empty: a stereo "Riff 01.wav"). */
         void setExampleSource (const juce::File& source, const juce::File& root, std::optional<model::Channel>);

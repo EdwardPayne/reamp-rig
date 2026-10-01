@@ -23,11 +23,17 @@ namespace rf::model
                 && formats.findFormatForFileExtension (f.getFileExtension()) != nullptr;
         }
 
+        bool sameName (const juce::String& a, const juce::String& b)
+        {
+            return juce::File::areFileNamesCaseSensitive() ? a == b : a.equalsIgnoreCase (b);
+        }
+
         struct Scan
         {
             bool recursive;
             juce::AudioFormatManager& formats;
             const std::function<bool()>& shouldAbort;
+            juce::String outputSubfolderName;
 
             ScanResult result;
             std::set<juce::String> seen;
@@ -95,9 +101,19 @@ namespace rf::model
                 }
 
                 if (recursive)
+                {
                     for (const auto& sub : folders)
-                        if (! aborted())
+                    {
+                        if (aborted())
+                            return;
+
+                        // Results written "next to the source" must never come back as sources.
+                        if (outputSubfolderName.isNotEmpty() && sameName (sub.getFileName(), outputSubfolderName))
+                            result.skippedOutputFolders.push_back (sub);
+                        else
                             addFolder (sub);
+                    }
+                }
             }
         };
     }
@@ -155,9 +171,10 @@ namespace rf::model
 
     ScanResult FolderScanner::scan (const juce::Array<juce::File>& inputs, bool recursive,
                                     juce::AudioFormatManager& formats,
-                                    const std::function<bool()>& shouldAbort)
+                                    const std::function<bool()>& shouldAbort,
+                                    const juce::String& outputSubfolderName)
     {
-        Scan scan { recursive, formats, shouldAbort, {}, {}, {} };
+        Scan scan { recursive, formats, shouldAbort, outputSubfolderName.trim(), {}, {}, {} };
 
         for (const auto& input : inputs)
         {
@@ -180,16 +197,17 @@ namespace rf::model
     //==============================================================================
     struct FolderScanner::Job final : public juce::ThreadPoolJob
     {
-        Job (FolderScanner& s, juce::Array<juce::File> in, bool rec, Callback cb)
+        Job (FolderScanner& s, juce::Array<juce::File> in, bool rec, Callback cb, juce::String skipName)
             : ThreadPoolJob ("Folder scan"),
               scanner (s), inputs (std::move (in)), recursive (rec), onDone (std::move (cb)),
-              alive (s.alive)
+              outputSubfolderName (std::move (skipName)), alive (s.alive)
         {
         }
 
         JobStatus runJob() override
         {
-            auto result = FolderScanner::scan (inputs, recursive, scanner.formats, [this] { return shouldExit(); });
+            auto result = FolderScanner::scan (inputs, recursive, scanner.formats, [this] { return shouldExit(); },
+                                               outputSubfolderName);
 
             juce::MessageManager::callAsync ([flag = alive, &owner = scanner,
                                               callback = std::move (onDone),
@@ -211,6 +229,7 @@ namespace rf::model
         juce::Array<juce::File> inputs;
         bool recursive;
         Callback onDone;
+        juce::String outputSubfolderName;
         std::shared_ptr<std::atomic<bool>> alive;
     };
 
@@ -225,10 +244,11 @@ namespace rf::model
         pool.removeAllJobs (true, 5000);
     }
 
-    void FolderScanner::scanAsync (juce::Array<juce::File> inputs, bool recursive, Callback onDone)
+    void FolderScanner::scanAsync (juce::Array<juce::File> inputs, bool recursive, Callback onDone,
+                                   juce::String outputSubfolderName)
     {
         JUCE_ASSERT_MESSAGE_THREAD
         ++pending;
-        pool.addJob (new Job (*this, std::move (inputs), recursive, std::move (onDone)), true);
+        pool.addJob (new Job (*this, std::move (inputs), recursive, std::move (onDone), std::move (outputSubfolderName)), true);
     }
 }

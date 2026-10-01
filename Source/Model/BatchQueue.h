@@ -85,6 +85,10 @@ namespace rf::model
             current entry. */
         double getRemainingSeconds (double extraSecondsPerFile, double currentElapsedSeconds) const;
 
+        /** Unfinished entries after the current one: each of them starts after a pause between
+            files (phase 6), so the ETA adds one pause per entry. */
+        int countUnfinishedAfterCurrent() const noexcept;
+
     private:
         std::vector<Entry> entries;
         int current = -1;

@@ -29,7 +29,10 @@ namespace rf::app
         - polls the engine snapshot at 30 Hz for the meters and the waveform playhead;
         - phase 5: shows the stored sync measurement of the current configuration (top-bar
           chip, SYNC readouts) after every device, rate or buffer change, and locks the AUDIO
-          controls while a batch or a sync measurement owns the device.
+          controls while a batch or a sync measurement owns the device;
+        - phase 6: a device that disappears stops audition, pauses the batch and stops Sync
+          (callbacks), and is reopened by itself when it is listed again (as is a saved device
+          that was missing at launch), unless a batch is running.
 
         It never touches engine internals: device state comes from DeviceStatus plus
         AudioDeviceInterface::Listener, engine state from EngineSnapshot.
@@ -119,12 +122,27 @@ namespace rf::app
         /** Called with every engine snapshot before onSnapshot (the SyncController). */
         std::function<void (const engine::EngineSnapshot&)> onSyncSnapshot;
 
-        /** Called when the open device stops or disappears (message thread). */
-        std::function<void()> onDeviceStopped;
+        /** Called when the open device stops or disappears (message thread): the batch
+            (onDeviceStopped) and a running sync measurement (onSyncDeviceStopped). */
+        std::function<void()> onDeviceStopped, onSyncDeviceStopped;
+
+        /** Called when a device that had been lost (or was missing at launch) is open again
+            (message thread), with its description. */
+        std::function<void (const juce::String&)> onDeviceReopened;
+
+        /** Called after the SYNC readouts and the chip were refreshed from the store (device,
+            rate or buffer change, or a measurement stored or forgotten). */
+        std::function<void()> onSyncUiRefreshed;
+
+        /** Asked before the saved device is reopened by itself: while a batch runs (on a
+            fallback device) it is not switched; a batch paused by the loss is fine. */
+        std::function<bool()> isBatchRunning;
 
     private:
         void audioDeviceChanged() override;
         void timerCallback() override;
+        void deviceLost();
+        void checkReconnect();
 
         void applyConfig (const engine::DeviceConfig& wanted, bool persist);
         void requestMicrophoneIfNeeded();
@@ -149,6 +167,14 @@ namespace rf::app
         engine::SourceLoader loader;
 
         engine::DeviceConfig selected;          // what the UI shows (resolved)
+
+        // Reconnection (phase 6): the devices the user wants (saved or picked, or the ones the
+        // app chose on a first launch); reopened by themselves when they are listed again
+        // after being lost or missing at launch. Checked on every device-list change and on
+        // a slow poll (every 2 s).
+        engine::DeviceConfig preferred;
+        engine::ReconnectWatch reconnect;
+        int slowTicks = 0;
         bool deviceWasOpen = false;
         bool applying = false;
         const bool needsPermission;

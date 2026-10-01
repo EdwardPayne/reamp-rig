@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
+#include <juce_graphics/juce_graphics.h>
 
 #include <optional>
 
@@ -92,6 +93,18 @@ namespace rf::app
         --press-start              press Start once the --open scans finished (shows the "Not
                                    synced" confirmation when a configuration lacks a measurement;
                                    for snapshots)
+
+        Phase 6:
+        --window-bounds=<x>,<y>,<w>,<h>  move and resize the window after launch as if the user
+                                   had dragged it (screen coordinates of the content, below the
+                                   title bar); it is then remembered like any user change
+        --press-forget             open the "Forget" confirmation of the SYNC section once the
+                                   device is open (needs a measurement for the configuration;
+                                   for snapshots)
+        --virtual-unplug=<at>:<for>  the virtual interface is unplugged <at> seconds after launch
+                                   and plugged back in <for> seconds later (checks that a batch
+                                   pauses, the device reopens by itself, and --batch-check then
+                                   resumes and passes)
     */
     struct LaunchOptions
     {
@@ -124,6 +137,9 @@ namespace rf::app
         std::optional<int> virtualReportedLatency;
         std::optional<juce::File> settingsFile;
         bool pressStart = false;
+        std::optional<juce::Rectangle<int>> windowBounds;
+        bool pressForget = false;
+        std::optional<std::pair<double, double>> virtualUnplug;
 
         static LaunchOptions parse (const juce::StringArray& args, const juce::File& workingDirectory);
     };

@@ -51,6 +51,13 @@ namespace rf::app
             return (db > 0.0f ? "+" : "") + juce::String (db, 1);
         }
 
+        /** "2", "0.5" (tenths, no trailing ".0"). */
+        juce::String formatSeconds (double s)
+        {
+            const auto text = juce::String (s, 1);
+            return text.endsWith (".0") ? text.dropLastCharacters (2) : text;
+        }
+
         juce::String describePolicy (model::CollisionPolicy p)
         {
             switch (p)
@@ -85,8 +92,32 @@ namespace rf::app
         audio.onDeviceStopped = [this]
         {
             if (queue.getState() == model::BatchQueue::State::running)
-                pauseBecause ("Paused: the audio device stopped. The interrupted file is recorded again on Resume.",
-                              Tone::warning);
+                pauseBecause ("Paused: the audio device stopped. It reopens by itself when it is back; then press Resume "
+                              "(the interrupted file is recorded again from its start).",
+                              Tone::warning,
+                              "Check the interface's cable and power. Files already Done are kept; the batch continues "
+                              "with the interrupted file on Resume. Stop ends the batch instead.");
+        };
+
+        // A device that came back is not switched under a running batch (e.g. one that runs on
+        // a fallback device); a batch paused by the loss waits for Resume.
+        audio.isBatchRunning = [this] { return queue.getState() == model::BatchQueue::State::running; };
+
+        audio.onDeviceReopened = [this] (const juce::String& where)
+        {
+            if (queue.getState() != model::BatchQueue::State::paused)
+                return;
+
+            const auto* item = tree.find (currentId);
+            views.statusBar.setMessage (where + " is back. Press Resume to continue"
+                                        + (item != nullptr ? ": " + item->file.getFileName() + " is recorded again from its start."
+                                                           : juce::String (".")));
+
+            if (check.active)
+            {
+                printCheck ("device back (" + where + "): Resume");
+                pauseResume();
+            }
         };
 
         views.topBar.onStart = [this] { start(); };
@@ -102,11 +133,14 @@ namespace rf::app
 
     BatchController::~BatchController()
     {
+        stopTimer();
         tree.removeListener (this);
         cancelPendingUpdate();
 
         audio.onSnapshot = nullptr;
         audio.onDeviceStopped = nullptr;
+        audio.isBatchRunning = nullptr;
+        audio.onDeviceReopened = nullptr;
 
         for (auto* f : { &views.topBar.onStart, &views.topBar.onPauseResume, &views.topBar.onSkip, &views.topBar.onStop,
                          &views.fileList.onSkipCurrent, &views.fileList.onRedoWarnings })
@@ -165,6 +199,9 @@ namespace rf::app
 
         bitsPerSample = options.getBitsPerSample();
         tailMs = options.getTailMs();
+        pauseBetweenSeconds = options.getPauseBetweenSeconds();
+        settleUntilMs = 0.0;          // nothing has played yet: the first take starts at once
+        waitedTotalMs = 0.0;
 
         const auto status = audio.getDeviceStatus();
         startConfig = audio.getSelectedConfig();
@@ -185,7 +222,8 @@ namespace rf::app
         updateTransport();
 
         juce::Logger::writeToLog ("Batch: " + juce::String (queue.getTotal()) + " files queued on "
-                                  + audio.describeDevice (status));
+                                  + audio.describeDevice (status) + ", pause between files "
+                                  + juce::String (pauseBetweenSeconds, 1) + " s");
         next();
     }
 
@@ -245,25 +283,46 @@ namespace rf::app
             if (! audio.checkCanRecord())
                 return;
 
-            pausedTotalMs += juce::Time::getMillisecondCounterHiRes() - pausedSinceMs;
+            const auto now = juce::Time::getMillisecondCounterHiRes();
+            pausedTotalMs += now - pausedSinceMs;
             queue.resume();
             phase = Phase::idle;
+            currentId = queue.getCurrent();
             updateTransport();
-            beginFile();
+
+            // The interrupted take (or a device that just came back) may still ring through the
+            // amp: Resume waits the pause between files once more before recording.
+            settleUntilMs = now + pauseBetweenSeconds * 1000.0;
+
+            if (pauseBetweenSeconds > 0.0 && currentId != 0)
+                startWaiting();
+            else
+                beginFile();
+
             return;
         }
 
         if (queue.getState() == model::BatchQueue::State::running)
         {
             const auto* item = tree.find (currentId);
-            pauseBecause ("Paused" + (item != nullptr ? ": " + item->file.getFileName() + " is recorded again from its start on Resume"
-                                                      : juce::String()),
-                          Tone::normal);
+            const auto name = item != nullptr ? item->file.getFileName() : juce::String();
+            const auto resumeWait = pauseBetweenSeconds > 0.0 ? " after the " + formatSeconds (pauseBetweenSeconds) + " s pause"
+                                                              : juce::String();
+
+            if (phase == Phase::waiting)
+                pauseBecause ("Paused before " + name + ". Resume records it" + resumeWait + ".", Tone::normal);
+            else
+                pauseBecause ("Paused" + (item != nullptr ? ": " + name + " is recorded again from its start on Resume" + resumeWait
+                                                          : juce::String()),
+                              Tone::normal);
         }
     }
 
-    void BatchController::pauseBecause (const juce::String& message, Tone tone)
+    void BatchController::pauseBecause (const juce::String& message, Tone tone, const juce::String& detail)
     {
+        if (phase == Phase::waiting)
+            endWaiting();
+
         cancelCurrent();
 
         if (currentId != 0)
@@ -274,13 +333,56 @@ namespace rf::app
         pausedSinceMs = juce::Time::getMillisecondCounterHiRes();
         views.waveform.setPlayhead (std::nullopt);
         updateTransport();
-        views.statusBar.setMessage (message, tone);
+        views.statusBar.setMessage (message, tone, detail);
+        juce::Logger::writeToLog ("Batch: " + message);
+
+        if (check.active)
+            printCheck ("paused: " + message);
+    }
+
+    bool BatchController::handleWriteFailure (const juce::String& error, const juce::File& output)
+    {
+        // The destination refused the file. A full disk or an unwritable single output folder
+        // would fail every following file too, so the batch pauses (the file stays queued and
+        // is recorded again on Resume). An unwritable subfolder next to one source only
+        // affects that source's files: the caller marks the file Error and goes on.
+        const auto folder = output.getParentDirectory();
+        auto existing = folder;
+
+        while (! existing.isDirectory() && existing.getParentDirectory() != existing)
+            existing = existing.getParentDirectory();
+
+        const auto* item = tree.find (currentId);
+        const auto needed = (item != nullptr ? item->info.lengthInSamples * (bitsPerSample / 8) : 0) + (juce::int64) (1 << 20);
+        const auto diskFull = existing.getBytesFreeOnVolume() < needed;
+        const auto where = format::displayPath (folder);
+        const auto name = output.getFileName();
+
+        juce::String message;
+
+        if (diskFull)
+            message = "Paused: the disk is full, so " + name + " could not be written to " + where
+                    + ". Free some space, then press Resume (the file is recorded again).";
+        else if (naming.mode == model::DestinationMode::singleFolder)
+            message = "Paused: cannot write to " + where + ". Check that the folder still exists and is writable, then press "
+                      "Resume, or Stop and choose another output folder in DESTINATION.";
+        else
+            return false;
+
+        log.append ({ "      Write failed: " + error + "; batch paused" });
+        pauseBecause (message, Tone::error, error);
+        return true;
     }
 
     void BatchController::skipCurrent()
     {
         if (queue.getState() != model::BatchQueue::State::running || currentId == 0)
             return;
+
+        // During the pause between files this skips the file that was about to start; the
+        // wait itself continues for the next one (the previous take's tail still rings).
+        if (phase == Phase::waiting)
+            endWaiting();
 
         cancelCurrent();
         finishFile (FileStatus::skipped, 0, {}, "skipped by the user");
@@ -292,6 +394,9 @@ namespace rf::app
         if (! queue.isActive())
             return;
 
+        if (phase == Phase::waiting)
+            endWaiting();
+
         cancelCurrent();
 
         if (currentId != 0 && tree.find (currentId) != nullptr)
@@ -301,16 +406,36 @@ namespace rf::app
         finishBatch (true);
     }
 
+    std::vector<model::ItemId> BatchController::getRedoableIds() const
+    {
+        // Dropout, silence, clipping: a new take may fix them. NC (not calibrated): only once
+        // the configuration that take ran in has a sync measurement (decision 2026-10-01);
+        // before that a new take would be NC again. RS alone is never redone.
+        auto ids = tree.getIdsWithWarnings (Warning::redoable);
+
+        for (const auto id : tree.getIdsWithWarnings (Warning::notCalibrated))
+        {
+            if (std::find (ids.begin(), ids.end(), id) != ids.end())
+                continue;
+
+            if (const auto k = notCalibratedKeys.find (id); k != notCalibratedKeys.end() && audio.findSync (k->second).has_value())
+                ids.push_back (id);
+        }
+
+        return ids;
+    }
+
     void BatchController::redoFilesWithWarnings()
     {
         if (queue.isActive())
             return;
 
-        const auto ids = tree.getIdsWithWarnings (Warning::redoable);
+        const auto ids = getRedoableIds();
 
         if (ids.empty())
         {
-            views.statusBar.setMessage ("No files with dropout, silence or clipping warnings");
+            views.statusBar.setMessage ("No files to redo: no dropout, silence or clipping warnings, and no NC file whose "
+                                        "configuration has been synced since");
             return;
         }
 
@@ -342,6 +467,75 @@ namespace rf::app
             if (queue.getState() == model::BatchQueue::State::finished)
                 finishBatch (false);
 
+            return;
+        }
+
+        // Pause between files: the previous take's amp and reverb tail dies out first.
+        if (juce::Time::getMillisecondCounterHiRes() < settleUntilMs)
+        {
+            startWaiting();
+            return;
+        }
+
+        beginFile();
+    }
+
+    void BatchController::startWaiting()
+    {
+        phase = Phase::waiting;
+        waitStartedMs = juce::Time::getMillisecondCounterHiRes();
+        views.fileList.setBatchState (currentId, true);    // the file that starts next
+        views.waveform.setPlayhead (std::nullopt);         // the last take stays visible meanwhile
+        updateStatusLine();
+
+        if (check.active)
+        {
+            checkWaitStartMs = waitStartedMs;
+            printCheck ("wait: " + views.statusBar.getMessage());
+        }
+
+        startTimer (100);
+    }
+
+    void BatchController::endWaiting()
+    {
+        stopTimer();
+
+        if (phase == Phase::waiting)
+            waitedTotalMs += juce::Time::getMillisecondCounterHiRes() - waitStartedMs;
+    }
+
+    double BatchController::getRemainingWaitSeconds() const
+    {
+        return phase == Phase::waiting ? juce::jmax (0.0, settleUntilMs - juce::Time::getMillisecondCounterHiRes()) / 1000.0
+                                       : 0.0;
+    }
+
+    void BatchController::timerCallback()
+    {
+        if (phase != Phase::waiting || queue.getState() != model::BatchQueue::State::running)
+        {
+            stopTimer();
+            return;
+        }
+
+        if (juce::Time::getMillisecondCounterHiRes() < settleUntilMs)
+        {
+            updateStatusLine();
+            return;
+        }
+
+        endWaiting();
+        phase = Phase::idle;
+
+        if (check.active)
+            printCheck ("waited " + juce::String ((juce::Time::getMillisecondCounterHiRes() - checkWaitStartMs) / 1000.0, 2)
+                        + " s before file " + juce::String (queue.getCurrentIndex() + 1));
+
+        // Sync cannot start while a batch is active, but never record over a measurement.
+        if (audio.isSyncActive())
+        {
+            pauseBecause ("Paused: Sync is measuring. Resume when it has finished.", Tone::warning);
             return;
         }
 
@@ -522,8 +716,13 @@ namespace rf::app
 
         if (const auto error = take->start (spec, audio.getEngine(), writer); error.isNotEmpty())
         {
+            const auto writeFailed = take->getResult().writeFailed;
             take.reset();
             views.waveform.clearRecorded();
+
+            if (writeFailed && handleWriteFailure (error, spec.outputFile))
+                return;   // paused: the file is recorded again on Resume
+
             finishFile (FileStatus::error, 0, {}, error);
             next();
             return;
@@ -567,6 +766,15 @@ namespace rf::app
     {
         const auto r = take->getResult();
         const auto spec = take->getSpec();
+
+        // The source has been played: the next take waits for the amp's tail to die out.
+        settleUntilMs = juce::Time::getMillisecondCounterHiRes() + pauseBetweenSeconds * 1000.0;
+
+        if (! r.ok && r.writeFailed && handleWriteFailure (r.error, spec.outputFile))
+        {
+            take.reset();
+            return;   // paused: the file is recorded again on Resume
+        }
         const auto now = audio.getDeviceStatus();
         const auto xruns = (xrunsAtStart >= 0 && now.xrunCount > xrunsAtStart) ? now.xrunCount - xrunsAtStart : 0;
 
@@ -604,6 +812,12 @@ namespace rf::app
 
         processedSeconds += (double) r.length / fileRate;
         check.deviceRates[currentId] = spec.deviceRate;
+
+        // NC files become redoable once the configuration of this take is synced.
+        if (r.notCalibrated)
+            notCalibratedKeys[currentId] = engine::SyncKey::from (takeStatus);
+        else
+            notCalibratedKeys.erase (currentId);
         take.reset();
         phase = Phase::idle;
 
@@ -724,6 +938,7 @@ namespace rf::app
 
     void BatchController::finishBatch (bool stopped)
     {
+        stopTimer();
         take.reset();
         loader.cancel();
         preloaded.reset();
@@ -789,6 +1004,10 @@ namespace rf::app
             if (log.isOpen())
                 printCheck ("sidecar log: " + log.getFile().getFullPathName());
 
+            printCheck ("wall time " + juce::String ((juce::Time::getMillisecondCounterHiRes() - startedMs) / 1000.0, 2)
+                        + " s, of which pauses between files " + juce::String (waitedTotalMs / 1000.0, 2) + " s ("
+                        + formatSeconds (pauseBetweenSeconds) + " s each)");
+
             ok = verifyOutputs() && ok;
             printCheck (ok ? "PASS" : "FAIL");
 
@@ -800,9 +1019,25 @@ namespace rf::app
     //==============================================================================
     double BatchController::getElapsedActiveSeconds() const
     {
+        // Paused time and the pauses between files are not part of the pace: the ETA adds
+        // the waits still to come explicitly.
         const auto now = juce::Time::getMillisecondCounterHiRes();
         const auto pausedNow = phase == Phase::paused ? now - pausedSinceMs : 0.0;
-        return juce::jmax (0.0, (now - startedMs - pausedTotalMs - pausedNow) / 1000.0);
+        const auto waitingNow = phase == Phase::waiting ? now - waitStartedMs : 0.0;
+        return juce::jmax (0.0, (now - startedMs - pausedTotalMs - pausedNow - waitedTotalMs - waitingNow) / 1000.0);
+    }
+
+    double BatchController::getEtaSeconds (double currentElapsedAudio, double extraPerFile) const
+    {
+        // Audio still to record at the pace measured so far (loading, rate switches and writing
+        // count; real time before the first file finishes), plus every pause between files
+        // still to come: the rest of the current wait and one per file after the current one.
+        const auto remainingAudio = queue.getRemainingSeconds (extraPerFile, currentElapsedAudio);
+        const auto activeSeconds = getElapsedActiveSeconds();
+        const auto pace = processedSeconds > 0.5 && activeSeconds > 0.5 ? processedSeconds / activeSeconds : 1.0;
+        const auto waits = getRemainingWaitSeconds() + pauseBetweenSeconds * queue.countUnfinishedAfterCurrent();
+
+        return remainingAudio / juce::jmax (0.01, pace) + waits;
     }
 
     void BatchController::updateStatusLine()
@@ -814,6 +1049,17 @@ namespace rf::app
 
         const auto position = "File " + juce::String (queue.getCurrentIndex() + 1) + " of " + juce::String (queue.getTotal());
 
+        if (phase == Phase::waiting)
+        {
+            const auto seconds = (int) std::ceil (getRemainingWaitSeconds() - 1.0e-3);
+            views.statusBar.setMessage (position + dash() + "next in " + juce::String (juce::jmax (0, seconds)) + " s"
+                                            + dash() + "ETA " + clock (getEtaSeconds (0.0, tailMs / 1000.0)),
+                                        Tone::normal,
+                                        "Pause between files (OPTIONS): waiting for the amp to settle before "
+                                            + item->file.getFileName() + ". Pause, Skip and Stop work during the wait.");
+            return;
+        }
+
         if (phase == Phase::loading || take == nullptr)
         {
             views.statusBar.setMessage (position + dash() + "loading " + item->file.getFileName() + ellipsis());
@@ -823,16 +1069,11 @@ namespace rf::app
         const auto elapsed = take->getPlayheadSeconds();
         const auto duration = item->info.getDurationSeconds();
 
-        // ETA: the audio still to record, at the pace measured so far (includes loading,
-        // rate switches and writing); before the first file finishes, real time.
         const auto spec = take->getSpec();
         const auto extra = tailMs / 1000.0 + (double) spec.latencySamples / juce::jmax (1.0, spec.deviceRate);
-        const auto remainingAudio = queue.getRemainingSeconds (extra, take->getProgress() * (duration + extra));
-        const auto activeSeconds = getElapsedActiveSeconds();
-        const auto pace = processedSeconds > 0.5 && activeSeconds > 0.5 ? processedSeconds / activeSeconds : 1.0;
 
         views.statusBar.setMessage (position + dash() + clock (elapsed) + " / " + clock (duration)
-                                    + dash() + "ETA " + clock (remainingAudio / juce::jmax (0.01, pace)),
+                                    + dash() + "ETA " + clock (getEtaSeconds (take->getProgress() * (duration + extra), extra)),
                                     Tone::normal,
                                     item->file.getFullPathName() + arrow() + target.file.getFullPathName());
     }

@@ -260,4 +260,35 @@ namespace rf::engine
         result.inputOpen = final.inputChannel >= 0;
         return result;
     }
+
+    bool DeviceSession::isPresent (const DeviceConfig& wanted)
+    {
+        if (wanted.outputDevice.isEmpty() && wanted.inputDevice.isEmpty())
+            return false;
+
+        if (! device.getTypeNames().contains (wanted.typeName))
+            return false;
+
+        if (wanted.outputDevice.isNotEmpty() && ! device.getDeviceNames (wanted.typeName, false).contains (wanted.outputDevice))
+            return false;
+
+        if (wanted.inputDevice.isNotEmpty() && ! device.getDeviceNames (wanted.typeName, true).contains (wanted.inputDevice))
+            return false;
+
+        return true;
+    }
+
+    bool DeviceSession::runs (const DeviceStatus& status, const DeviceConfig& wanted)
+    {
+        if (! status.isOpen || status.config.typeName != wanted.typeName)
+            return false;
+
+        if (wanted.outputDevice.isNotEmpty() && status.config.outputDevice != wanted.outputDevice)
+            return false;
+
+        if (wanted.inputDevice.isNotEmpty() && status.config.inputDevice.isNotEmpty() && status.config.inputDevice != wanted.inputDevice)
+            return false;
+
+        return true;
+    }
 }

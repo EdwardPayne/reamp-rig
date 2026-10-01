@@ -39,6 +39,8 @@ namespace rf::engine
         juce::int64 paddedSamples = 0;      // silence appended because samples were missing (dropouts)
         float peak = 0.0f;                  // absolute peak of the written samples
         bool resampled = false;
+        bool writeFailed = false;           // the file system refused the data (disk full,
+                                            // permissions, volume gone): not a problem of the take
     };
 
     /*  The writer thread (PROMPT.md 3.3.5, 3.4.4, 3.4.6, 4.3, 4.4; ARCHITECTURE.md).

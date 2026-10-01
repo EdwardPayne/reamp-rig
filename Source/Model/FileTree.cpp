@@ -188,6 +188,19 @@ namespace rf::model
         setSelection ({}, lead);
     }
 
+    int FileTree::deselect (const std::vector<ItemId>& ids)
+    {
+        auto n = 0;
+
+        for (auto id : ids)
+            n += (int) selection.erase (id);
+
+        if (n > 0)
+            changed();
+
+        return n;
+    }
+
     //==============================================================================
     int FileTree::setChannel (const std::vector<ItemId>& ids, Channel channel)
     {

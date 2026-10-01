@@ -17,6 +17,7 @@ namespace rf::ui
         constexpr int meterHeight    = 18;
         constexpr int sliderTextBoxWidth = 72;
         constexpr int syncTextBoxWidth = 88;
+        constexpr int forgetButtonWidth = 80;
 
         juce::String emDash()   { return utf8 ("\xe2\x80\x94"); }
 
@@ -42,12 +43,12 @@ namespace rf::ui
           splitNotice ("Not sample-synchronized, for testing only"),
           peakReadout ("Peak at output", emDash())
     {
-        fillCombo (typeBox,          { "No driver" },  "Audio driver type (CoreAudio on macOS; ASIO or Windows Audio on Windows).");
+        fillCombo (typeBox,          { "No driver" },  "Audio driver (CoreAudio on macOS; ASIO or Windows Audio on Windows).");
         fillCombo (outputDeviceBox,  { "No device" },  "Device whose output feeds the amp.");
         fillCombo (inputDeviceBox,   { "No device" },  "Device whose input records the amp. Use the same device as the output "
                                                         "for sample-accurate results.");
-        fillCombo (sampleRateBox,    { emDash() },     "Device sample rate.");
-        fillCombo (bufferSizeBox,    { emDash() },     "Device buffer size in samples.");
+        fillCombo (sampleRateBox,    { emDash() },     "Device sample rate. The batch switches it to each file's rate and back.");
+        fillCombo (bufferSizeBox,    { emDash() },     "Device buffer size in samples. Each rate and buffer needs its own Sync.");
         fillCombo (outputChannelBox, { emDash() },     "Output channel that feeds the amp.");
         fillCombo (inputChannelBox,  { emDash() },     "Input channel that records the amp.");
 
@@ -67,7 +68,7 @@ namespace rf::ui
         outputLevel.setDoubleClickReturnValue (true, 0.0);
         outputLevel.setTextValueSuffix (" dB");
         outputLevel.setNumDecimalPlacesToDisplay (1);
-        outputLevel.setTooltip ("Gain applied to every file on playback (-60 to +12 dB). Double-click for 0 dB.");
+        setSliderTooltip (outputLevel, "Gain applied to every file on playback (-60 to +12 dB). Double-click for 0 dB.");
 
         peakReadout.setTooltip ("Peak of the selected file's played channel with the output level applied.");
 
@@ -165,8 +166,8 @@ namespace rf::ui
         level.setDoubleClickReturnValue (true, -12.0);
         level.setTextValueSuffix (" dBFS");
         level.setNumDecimalPlacesToDisplay (1);
-        level.setTooltip ("Peak level of the sync test signal at the output (-60 to 0 dBFS, default -12). "
-                          "The output level control does not apply to it. Double-click for -12 dBFS.");
+        setSliderTooltip (level, "Peak level of the sync test signal at the output (-60 to 0 dBFS, default -12). "
+                                 "The output level does not apply to it. Double-click for -12 dBFS.");
 
         measured.setTooltip ("Round trip measured for the current device configuration.");
         peak.setTooltip ("Peak level of the test signal as it came back on the input.");
@@ -178,6 +179,10 @@ namespace rf::ui
         setButtonStyle (syncButton, ButtonStyle::primary);
         syncButton.setTooltip ("Measure the round-trip latency of the current output/input pair.");
 
+        setButtonStyle (forgetButton, ButtonStyle::secondary);
+        forgetButton.setTooltip ("Delete the stored measurement for the current device configuration (asks first).");
+        forgetButton.setEnabled (false);
+
         addRow ({ { {}, &hint } }, hintHeight);
         addRow ({ { "Sync level", &level } }, sliderHeight);
         addRow ({ { {}, &measured } }, readoutHeight);
@@ -187,7 +192,7 @@ namespace rf::ui
         addRow ({ { {}, &driver } }, readoutHeight);
         addRow ({ { {}, &failure } }, noticeHeight);
         addRow ({ { {}, &progress } }, readoutHeight);
-        addRow ({ { {}, &syncButton } }, metric::controlHeight);
+        addRow ({ { {}, &syncButton }, { {}, &forgetButton, forgetButtonWidth } }, metric::controlHeight);
 
         setRowVisible (failure, false);
         setRowVisible (progress, false);
@@ -274,15 +279,22 @@ namespace rf::ui
         : SidebarSection ("Options")
     {
         includeSubfolders.setToggleState (true, juce::dontSendNotification);
-        includeSubfolders.setTooltip ("Scan dropped and added folders recursively.");
+        includeSubfolders.setTooltip ("Scan dropped and added folders with their subfolders. Subfolders named like the "
+                                      "DESTINATION subfolder (\"Reamped\") hold results and are always skipped.");
         channelTag.setTooltip ("Append _L or _R to output names of stereo sources.");
 
         setUpEditor (tailEditor, "0", "Extra time recorded after the source ends, in milliseconds (0 = exactly "
                                       "the source length).");
         tailEditor.setInputRestrictions (5, "0123456789");
 
+        setUpEditor (pauseEditor, "2", "Seconds the batch waits after each file before the next take starts, so amp "
+                                       "and reverb tails die out (0 to 60, default 2).");
+        pauseEditor.setTextToShowWhenEmpty ("0", theme::colour::muted);
+        pauseEditor.setInputRestrictions (4, "0123456789.");
+
         addRow ({ { {}, &includeSubfolders } }, toggleHeight);
         addRow ({ { {}, &channelTag } }, toggleHeight);
         addRow ({ { "Tail (ms)", &tailEditor } }, metric::controlHeight);
+        addRow ({ { "Pause between files (s)", &pauseEditor } }, metric::controlHeight);
     }
 }

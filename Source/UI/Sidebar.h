@@ -1,5 +1,6 @@
 #pragma once
 
+#include "LookAndFeel.h"
 #include "SidebarSections.h"
 
 namespace rf::ui
@@ -39,7 +40,7 @@ namespace rf::ui
             std::array<SidebarSection*, 4> sections { &audio, &sync, &destination, &options };
         };
 
-        juce::Viewport viewport;
+        TooltipViewport viewport { "Scroll the settings (or use the mouse wheel / trackpad)." };
         Content content;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Sidebar)

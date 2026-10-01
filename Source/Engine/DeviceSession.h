@@ -59,7 +59,60 @@ namespace rf::engine
 
         Result open (const DeviceConfig& wanted, bool openInput);
 
+        /** True when the driver type and every device named in `wanted` (output, input; empty
+            names are ignored) are listed right now. False when `wanted` names no device. */
+        bool isPresent (const DeviceConfig& wanted);
+
+        /** True when `status` is open on the driver type and devices named in `wanted`. */
+        static bool runs (const DeviceStatus& status, const DeviceConfig& wanted);
+
     private:
         AudioDeviceInterface& device;
+    };
+
+    //==============================================================================
+    /*  Decides when the saved device should be reopened by itself (phase 6): when it was
+        missing (unplugged while open, or absent at launch so another device was opened) and
+        is listed again. Fed with the presence of the wanted devices on every device-list
+        change and on a slow poll. A comeback that arrives while the device cannot be
+        reopened (a take or a sync measurement runs) is remembered until it can.
+    */
+    class ReconnectWatch
+    {
+    public:
+        /** Starts watching; `presentNow` is the wanted devices' presence at this moment. */
+        void reset (bool presentNow) noexcept       { wasPresent = presentNow; pending = false; }
+
+        /** Returns true when the wanted devices should be reopened now. */
+        bool update (bool presentNow, bool runningWanted, bool canReopenNow) noexcept
+        {
+            if (! presentNow)
+            {
+                wasPresent = false;
+                pending = false;
+                return false;
+            }
+
+            if (! wasPresent)
+                pending = true;      // it has come back
+
+            wasPresent = true;
+
+            if (runningWanted)
+                pending = false;     // already running (e.g. the user picked it again)
+
+            if (pending && canReopenNow)
+            {
+                pending = false;
+                return true;
+            }
+
+            return false;
+        }
+
+        bool isPending() const noexcept             { return pending; }
+
+    private:
+        bool wasPresent = true, pending = false;
     };
 }

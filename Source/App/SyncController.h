@@ -3,6 +3,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "../Engine/SyncMeasurer.h"
+#include "../UI/ConfirmDialog.h"
 #include "../UI/SidebarSections.h"
 #include "../UI/StatusBar.h"
 #include "../UI/TopBar.h"
@@ -21,7 +22,10 @@ namespace rf::app
         - a passing measurement is stored in the keyed store (Settings) for exactly the
           configuration it was made in, and the chip/readouts are refreshed; a failure is shown
           in the section and the status bar and stores nothing (an older measurement for that
-          configuration is kept).
+          configuration is kept);
+        - phase 6: Forget deletes the measurement of the current configuration after a
+          confirmation (ui::ConfirmDialog); a device that stops during a measurement ends it
+          at once with a plain-language failure.
 
         It drives the engine only through AudioController and engine::SyncMeasurer.
     */
@@ -33,6 +37,7 @@ namespace rf::app
             ui::SyncSection& sync;
             ui::TopBar& topBar;
             ui::StatusBar& statusBar;
+            ui::ConfirmDialog& confirm;
         };
 
         SyncController (Settings&, AudioController&, Views);
@@ -42,6 +47,12 @@ namespace rf::app
         void toggle();
         bool start();
         void cancel();
+
+        /** Forget: asks, then deletes the stored measurement of the current configuration. */
+        void forget();
+
+        /** Called after a measurement was stored or forgotten (e.g. to re-check NC files). */
+        std::function<void()> onStoreChanged;
 
         bool isMeasuring() const noexcept           { return measurer.isRunning(); }
 
@@ -63,7 +74,11 @@ namespace rf::app
     private:
         void handleSnapshot (const engine::EngineSnapshot&);
         void finished();
+        void deviceStopped();
+    public:
         void refreshControls();
+
+    private:
         void unlock();
         void checkNext();
         void printCheck (const juce::String&) const;

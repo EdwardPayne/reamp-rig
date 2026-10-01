@@ -2,6 +2,8 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
+#include "LookAndFeel.h"
+
 #include <mutex>
 #include <optional>
 
@@ -115,7 +117,7 @@ namespace rf::ui
         bool recordedLive = false;
         juce::File recordedSource, recordedFile;
 
-        juce::ScrollBar scrollBar { false };
+        TooltipScrollBar scrollBar { false };
 
         juce::File sourceFile;
         int numChannels = 0;

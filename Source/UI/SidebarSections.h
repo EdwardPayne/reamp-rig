@@ -71,6 +71,14 @@ namespace rf::ui
         juce::Slider& getLevelSlider() noexcept         { return level; }
         juce::TextButton& getSyncButton() noexcept      { return syncButton; }
 
+        /** Deletes the stored measurement of the current configuration (after a confirmation). */
+        juce::TextButton& getForgetButton() noexcept    { return forgetButton; }
+
+        /** Whether the current configuration has a stored measurement (set with the readouts;
+            the app enables Forget from it). */
+        void setHasMeasurement (bool has) noexcept      { hasMeasurement = has; }
+        bool getHasMeasurement() const noexcept         { return hasMeasurement; }
+
         ValueReadout& getMeasuredReadout() noexcept     { return measured; }
         ValueReadout& getPeakReadout() noexcept         { return peak; }
         ValueReadout& getConfidenceReadout() noexcept   { return confidence; }
@@ -94,8 +102,8 @@ namespace rf::ui
         ValueReadout measured, peak, confidence, date, driver;
         NoticeLine failure { {} };
         RepeatProgress progress;
-        juce::TextButton syncButton { "Sync" };
-        bool measuring = false;
+        juce::TextButton syncButton { "Sync" }, forgetButton { "Forget" };
+        bool measuring = false, hasMeasurement = false;
     };
 
     class DestinationSection final : public SidebarSection
@@ -137,9 +145,12 @@ namespace rf::ui
         juce::ToggleButton& getChannelTagToggle() noexcept          { return channelTag; }
         juce::TextEditor& getTailEditor() noexcept                  { return tailEditor; }
 
+        /** Seconds the batch waits between files (phase 6). */
+        juce::TextEditor& getPauseEditor() noexcept                 { return pauseEditor; }
+
     private:
         juce::ToggleButton includeSubfolders { "Include subfolders" };
         juce::ToggleButton channelTag { "Append channel tag (_L / _R)" };
-        juce::TextEditor tailEditor;
+        juce::TextEditor tailEditor, pauseEditor;
     };
 }

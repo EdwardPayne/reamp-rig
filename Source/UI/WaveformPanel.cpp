@@ -67,8 +67,9 @@ namespace rf::ui
         scrollBar.addListener (this);
         addChildComponent (scrollBar);
 
-        setTooltip ("Click to set the audition start point. Cmd+scroll or pinch to zoom; "
+        setTooltip ("Click to set the audition start point. Cmd-scroll or pinch to zoom; "
                     "scroll to move along the file when zoomed in.");
+        scrollBar.setTooltip ("Drag to move along the file while zoomed in (or scroll in the waveform).");
     }
 
     WaveformPanel::~WaveformPanel()
@@ -388,7 +389,8 @@ namespace rf::ui
         if (hasRecorded())
             paintRecordedLane (g, recordedLabelArea, recordedWaveArea);
         else
-            paintEmptyLane (g, recordedLabelArea, recordedWaveArea, "Recorded", utf8 ("\xe2\x80\x94"));
+            paintEmptyLane (g, recordedLabelArea, recordedWaveArea, "Recorded",
+                            hasSource() ? "Not recorded yet" : "The take shows here, under its source");
 
         // Label column continues down beside the scrollbar.
         g.setColour (colour::lineSoft);

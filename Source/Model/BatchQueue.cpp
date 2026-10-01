@@ -154,4 +154,15 @@ namespace rf::model
 
         return juce::jmax (0.0, total);
     }
+
+    int BatchQueue::countUnfinishedAfterCurrent() const noexcept
+    {
+        auto n = 0;
+
+        for (int i = current + 1; i < (int) entries.size(); ++i)
+            if (entries[(size_t) i].outcome == FileStatus::queued)
+                ++n;
+
+        return n;
+    }
 }
