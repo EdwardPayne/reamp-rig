@@ -1,4 +1,4 @@
-# Reamp Forge — guide for Claude sessions
+# Reamp Rig — guide for Claude sessions
 
 Batch re-amping tool: plays DI guitar files out of an audio interface, through a hardware amp,
 and records the result sample-aligned. C++20, JUCE 9, CMake. macOS first, Windows planned.
@@ -16,14 +16,14 @@ and records the result sample-aligned. C++20, JUCE 9, CMake. macOS first, Window
 ```sh
 cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"
-open "build/ReampForge_artefacts/Release/Reamp Forge.app"
+open "build/ReampRig_artefacts/Release/Reamp Rig.app"
 ctest --test-dir build --output-on-failure        # JUCE UnitTest cases in Tests/
 ```
 
 Snapshot the UI without screen-recording permission:
 
 ```sh
-"build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge" --snapshot="$PWD/docs/<name>.png"
+"build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig" --snapshot="$PWD/docs/<name>.png"
 ```
 
 Add `--open=<file or folder>` (repeatable) to load files; `--select=`, `--audition-at=` and

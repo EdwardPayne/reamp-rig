@@ -11,7 +11,7 @@ namespace rf::test
     public:
         TempDirectory()
             : root (juce::File::getSpecialLocation (juce::File::tempDirectory)
-                        .getNonexistentChildFile ("reamp-forge-test", {}, false))
+                        .getNonexistentChildFile ("reamp-rig-test", {}, false))
         {
             root.createDirectory();
         }

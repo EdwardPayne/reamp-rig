@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # JUCE 9 requires C to be enabled alongside C++ (it builds its bundled zlib/libpng/flac as C).
-project(ReampForge VERSION 0.1.0 LANGUAGES C CXX)
+project(ReampRig VERSION 0.1.0 LANGUAGES C CXX)
 
 if(APPLE)
     enable_language(OBJCXX)
@@ -56,7 +56,7 @@ FetchContent_MakeAvailable(JUCE)
 
 #===============================================================================
 # Embedded fonts (SIL OFL, see Assets/Fonts/*-OFL.txt)
-juce_add_binary_data(ReampForgeAssets
+juce_add_binary_data(ReampRigAssets
     HEADER_NAME BinaryData.h
     NAMESPACE   BinaryData
     SOURCES
@@ -67,7 +67,7 @@ juce_add_binary_data(ReampForgeAssets
         Assets/Fonts/Inter-Medium.ttf
         Assets/Fonts/Inter-Bold.ttf)
 
-set_target_properties(ReampForgeAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(ReampRigAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 #===============================================================================
 # Model sources (no GUI, no audio thread). Compiled into both the app and the tests;
@@ -93,17 +93,17 @@ set(REAMPFORGE_ENGINE_SOURCES
 
 #===============================================================================
 # Application
-juce_add_gui_app(ReampForge
-    PRODUCT_NAME                  "Reamp Forge"
-    COMPANY_NAME                  "Reamp Forge"
-    BUNDLE_ID                     com.reampforge.app
+juce_add_gui_app(ReampRig
+    PRODUCT_NAME                  "Reamp Rig"
+    COMPANY_NAME                  "Reamp Rig"
+    BUNDLE_ID                     com.reamprig.app
     VERSION                       ${PROJECT_VERSION}
     MICROPHONE_PERMISSION_ENABLED TRUE
-    MICROPHONE_PERMISSION_TEXT    "Reamp Forge records the audio interface input that returns from your amplifier."
+    MICROPHONE_PERMISSION_TEXT    "Reamp Rig records the audio interface input that returns from your amplifier."
     NEEDS_WEB_BROWSER             FALSE
     NEEDS_CURL                    FALSE)
 
-target_sources(ReampForge PRIVATE
+target_sources(ReampRig PRIVATE
     Source/Main.cpp
     Source/App/AudioController.cpp
     Source/App/BatchController.cpp
@@ -131,26 +131,26 @@ target_sources(ReampForge PRIVATE
     ${REAMPFORGE_MODEL_SOURCES})
 
 if(APPLE)
-    target_sources(ReampForge PRIVATE
+    target_sources(ReampRig PRIVATE
         Source/App/MacAppearance.mm
         Source/App/MicrophonePermission.mm)
     # AVCaptureDevice authorization for the microphone permission (PROMPT.md section 4.7).
-    target_link_libraries(ReampForge PRIVATE "-framework AVFoundation")
+    target_link_libraries(ReampRig PRIVATE "-framework AVFoundation")
 else()
-    target_sources(ReampForge PRIVATE Source/App/MicrophonePermission.cpp)
+    target_sources(ReampRig PRIVATE Source/App/MicrophonePermission.cpp)
 endif()
 
-target_include_directories(ReampForge PRIVATE Source)
+target_include_directories(ReampRig PRIVATE Source)
 
-target_compile_definitions(ReampForge PRIVATE
+target_compile_definitions(ReampRig PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
-    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:ReampForge,JUCE_PRODUCT_NAME>"
-    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:ReampForge,JUCE_VERSION>")
+    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:ReampRig,JUCE_PRODUCT_NAME>"
+    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:ReampRig,JUCE_VERSION>")
 
-target_link_libraries(ReampForge
+target_link_libraries(ReampRig
     PRIVATE
-        ReampForgeAssets
+        ReampRigAssets
         juce::juce_gui_basics
         juce::juce_gui_extra
         juce::juce_audio_basics
@@ -165,9 +165,9 @@ target_link_libraries(ReampForge
 
 # Ad-hoc sign the whole bundle (binary + Info.plist + resources) for local runs.
 if(APPLE)
-    add_custom_command(TARGET ReampForge POST_BUILD
-        COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:ReampForge>"
-        COMMENT "Ad-hoc signing Reamp Forge.app"
+    add_custom_command(TARGET ReampRig POST_BUILD
+        COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:ReampRig>"
+        COMMENT "Ad-hoc signing Reamp Rig.app"
         VERBATIM)
 endif()
 
@@ -178,10 +178,10 @@ option(REAMPFORGE_BUILD_TESTS "Build the unit tests" ON)
 if(REAMPFORGE_BUILD_TESTS)
     enable_testing()
 
-    juce_add_console_app(ReampForgeTests
-        PRODUCT_NAME "Reamp Forge Tests")
+    juce_add_console_app(ReampRigTests
+        PRODUCT_NAME "Reamp Rig Tests")
 
-    target_sources(ReampForgeTests PRIVATE
+    target_sources(ReampRigTests PRIVATE
         Tests/TestMain.cpp
         Tests/FileTreeTests.cpp
         Tests/FolderScannerTests.cpp
@@ -203,15 +203,15 @@ if(REAMPFORGE_BUILD_TESTS)
         ${REAMPFORGE_ENGINE_SOURCES}
         ${REAMPFORGE_MODEL_SOURCES})
 
-    target_include_directories(ReampForgeTests PRIVATE Source Tests)
+    target_include_directories(ReampRigTests PRIVATE Source Tests)
 
-    target_compile_definitions(ReampForgeTests PRIVATE
+    target_compile_definitions(ReampRigTests PRIVATE
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0)
 
-    target_link_libraries(ReampForgeTests
+    target_link_libraries(ReampRigTests
         PRIVATE
-            ReampForgeAssets
+            ReampRigAssets
             juce::juce_core
             juce::juce_events
             juce::juce_audio_basics
@@ -226,6 +226,6 @@ if(REAMPFORGE_BUILD_TESTS)
     foreach(_rf_category FolderScanner FileTree FileTreeView Settings DeviceSession DuplexEngine SourceLoader
                          Resampler Loopback Take OutputNaming BatchQueue Sync)
         add_test(NAME ${_rf_category}
-                 COMMAND ReampForgeTests --category=${_rf_category})
+                 COMMAND ReampRigTests --category=${_rf_category})
     endforeach()
 endif()

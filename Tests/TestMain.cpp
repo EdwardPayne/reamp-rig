@@ -3,7 +3,7 @@
 
 /*  Test runner for all JUCE UnitTest cases in this executable.
 
-    Usage: ReampForgeTests [--category=<name>]
+    Usage: ReampRigTests [--category=<name>]
     Exit code is the number of failed test cases (0 = all passed), which is what ctest uses.
 */
 int main (int argc, char* argv[])

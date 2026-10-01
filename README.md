@@ -1,4 +1,4 @@
-# Reamp Forge
+# Reamp Rig
 
 Batch re-amping of guitar DI tracks through a hardware amp via an audio interface.
 Desktop app, C++20 + JUCE 9.0.3 (fetched automatically), CMake.
@@ -33,7 +33,7 @@ cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"
 The app bundle is written to:
 
 ```
-build/ReampForge_artefacts/Release/Reamp Forge.app
+build/ReampRig_artefacts/Release/Reamp Rig.app
 ```
 
 It is ad-hoc code signed as a post-build step, which is enough for local runs.
@@ -56,24 +56,24 @@ sudo rm -rf /Library/Developer/CommandLineTools/usr/include/c++
 ## Run
 
 ```sh
-open "build/ReampForge_artefacts/Release/Reamp Forge.app"
+open "build/ReampRig_artefacts/Release/Reamp Rig.app"
 ```
 
 or, to see stdout/stderr in the terminal:
 
 ```sh
-"build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge"
+"build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig"
 ```
 
 To add files or folders at startup (repeatable; folders follow the "Include subfolders" setting):
 
 ```sh
-"build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge" --open="$HOME/DI/Session A" --open=take.wav
+"build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig" --open="$HOME/DI/Session A" --open=take.wav
 ```
 
 ## Tests
 
-JUCE `UnitTest` cases in `Tests/`, built as `ReampForgeTests` with the app and run through ctest:
+JUCE `UnitTest` cases in `Tests/`, built as `ReampRigTests` with the app and run through ctest:
 
 ```sh
 ctest --test-dir build --output-on-failure
@@ -85,7 +85,7 @@ The app can render its own window (including open popup menus and tooltips) to a
 This works without granting the terminal screen-recording permission:
 
 ```sh
-"build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge" --snapshot="$PWD/docs/phase1.png"
+"build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig" --snapshot="$PWD/docs/phase1.png"
 ```
 
 The native macOS title bar is not part of the snapshot. It waits until scans and the waveform
@@ -146,7 +146,7 @@ confidence.
    the same rate need no switch) and restored afterwards; otherwise the file is resampled there
    and back with a high-quality resampler and marked RS.
 
-**Sidecar log.** Every batch writes `Reamp Forge batch <date> <time>.txt` into the destination
+**Sidecar log.** Every batch writes `Reamp Rig batch <date> <time>.txt` into the destination
 folder of its first file (the output folder itself in single-folder mode): device, rate, buffer,
 channels, level, latency used (measured or estimated), format and naming, then one entry per file
 (source → output, channel, samples, device rate, gain, latency, peak, warnings) as it finishes.
@@ -191,7 +191,7 @@ not touch yours) and `--press-start` (presses Start after loading, e.g. to snaps
 synced" dialog). Examples without touching any hardware:
 
 ```sh
-APP="build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge"
+APP="build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig"
 "$APP" --virtual-device --open="$HOME/DI/Session A" --select="Riff 01.wav" --output-level=-30 --audition-check=2
 "$APP" --open="$HOME/DI/Session A" --output-level=0 --virtual-speed=8 --batch-check=/tmp/reamp-check
 "$APP" --settings-file=/tmp/check.settings --virtual-loopback=1500 --sync-check

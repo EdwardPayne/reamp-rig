@@ -19,7 +19,7 @@ namespace rf::test
         void runTest() override
         {
             TempDirectory dir;
-            const auto file = dir.get().getChildFile ("Reamp Forge.settings");
+            const auto file = dir.get().getChildFile ("Reamp Rig.settings");
 
             beginTest ("defaults on a fresh file");
             {

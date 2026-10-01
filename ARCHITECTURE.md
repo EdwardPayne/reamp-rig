@@ -1,4 +1,4 @@
-# Reamp Forge architecture
+# Reamp Rig architecture
 
 Current through phase 5 (sync). Everything described here is implemented.
 
@@ -93,7 +93,7 @@ a thread-safe state snapshot and receives change notifications on the message th
   overflow are padded with silence at the end so the length stays exact.
 - **Level checks.** The writer measures the peak of what it writes: below -60 dBFS is "recorded
   silence?" (SIL), at or above 0.9999 is "clipped" (CLIP). Warnings only.
-- **Temp file and rename.** `.<name>.reampforge-part.wav` (hidden) in the destination folder,
+- **Temp file and rename.** `.<name>.reamprig-part.wav` (hidden) in the destination folder,
   renamed on success (`overwrite` replaces an existing file; otherwise a file that appeared
   meanwhile is not replaced and the take is reported as an error). Cancel, pause, stop, skip and
   quitting delete it.
@@ -228,7 +228,7 @@ a thread-safe state snapshot and receives change notifications on the message th
   Resume (a re-amp cannot be resumed mid-file without a discontinuity). Skip marks it Skipped.
   Stop discards it and leaves it Queued. A device that stops pauses the batch. A file removed
   from the list during the batch is skipped.
-- Sidecar log (`BatchLog`): one plain-text file per batch, "Reamp Forge batch <date> <time>.txt",
+- Sidecar log (`BatchLog`): one plain-text file per batch, "Reamp Rig batch <date> <time>.txt",
   in the destination folder of the first file handled (the output folder itself in single-folder
   mode). Header: device, rate, buffer, channels, level, latency source, format, tail, naming,
   destination, collision policy. One entry per file as it finishes (source -> output, channel,
@@ -435,7 +435,7 @@ current file instead of the selection.
 ## Settings (phases 2-4, implemented)
 
 `rf::app::Settings` owns a `juce::PropertiesFile` (XML file
-`~/Library/Application Support/Reamp Forge/Reamp Forge.settings` on macOS; tests pass their own
+`~/Library/Application Support/Reamp Rig/Reamp Rig.settings` on macOS; tests pass their own
 file). It is owned by the application object and passed to the main window. Keys so far:
 `includeSubfolders` (default on); `deviceType`, `inputDevice`, `outputDevice`, `sampleRate`,
 `bufferSize`, `inputChannel` + `inputChannelName`, `outputChannel` + `outputChannelName`
@@ -454,7 +454,7 @@ Hand-edited garbage falls back to safe values. The file list is never persisted.
 
 JUCE `UnitTest`, not Catch2: it is already part of `juce_core`, needs no extra download or
 dependency, and the code under test uses JUCE types throughout. `Tests/TestMain.cpp` is a JUCE
-console app (`ReampForgeTests`) that runs every test or one category
+console app (`ReampRigTests`) that runs every test or one category
 (`--category=<name>`) and exits non-zero on any failure. CMake registers one ctest entry per
 category (`FolderScanner`, `FileTree`, `FileTreeView`, `Settings`, `DeviceSession`,
 `DuplexEngine`, `SourceLoader`, `Resampler`, `Loopback`, `Take`, `OutputNaming`, `BatchQueue`,

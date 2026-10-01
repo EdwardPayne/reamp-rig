@@ -287,7 +287,7 @@ namespace rf::app
                 views.statusBar.setMessage ("Waiting for microphone access: answer the macOS prompt to open "
                                                 + (resolved.outputDevice.isNotEmpty() ? resolved.outputDevice : juce::String ("the audio device")),
                                             Tone::warning,
-                                            "macOS asks once whether Reamp Forge may use the microphone (needed to record "
+                                            "macOS asks once whether Reamp Rig may use the microphone (needed to record "
                                             "any audio input). The device opens as soon as the prompt is answered.");
                 requestMicrophoneIfNeeded();
                 return;
@@ -372,7 +372,7 @@ namespace rf::app
 
     void AudioController::showMicrophoneDenied()
     {
-        views.statusBar.setMessage ("Microphone access denied, so the input is off. Allow Reamp Forge in System Settings > "
+        views.statusBar.setMessage ("Microphone access denied, so the input is off. Allow Reamp Rig in System Settings > "
                                     "Privacy & Security > Microphone, then restart the app.",
                                     Tone::error,
                                     "macOS gives an app silence on every audio input, including audio interfaces, until "

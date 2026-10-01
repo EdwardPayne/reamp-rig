@@ -142,7 +142,7 @@ Verification commands (repository root; `SP` = the session scratchpad with the p
 cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"   # no errors, no warnings from our code
 ctest --test-dir build --output-on-failure                       # 13/13 passed (196 cases, 1382 checks)
-APP="build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge"
+APP="build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig"
 # 1. Sync on the virtual loopback, three delays (isolated settings files): exit 0 each
 "$APP" --settings-file="$SP/p5/delay37.settings" --virtual-loopback=37 --output-channel=3 --input-channel=2 --sync-check
 #    5 x 293 smp, peak-to-sidelobe 43.7 dB, returned -12.0 dBFS; OK 293 smp · 6.10 ms, high; true round trip 293 -> exact
@@ -270,7 +270,7 @@ Verification commands (repository root; `SP` = the session scratchpad with the p
 cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"   # no errors, no warnings from our code
 ctest --test-dir build --output-on-failure                       # 12/12 passed
-APP="build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge"
+APP="build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig"
 # 1. Batch on the virtual loopback (rates 44.1/48/96, device switches per file): exit 0
 "$APP" --open="$SP/audio/Session A" --open="$SP/audio/Session B" --output-level=0 --output-channel=3 \
        --input-channel=2 --virtual-speed=8 --batch-check="$SP/p4/out1"
@@ -384,7 +384,7 @@ Verification commands (repository root; `SP` = the session scratchpad with the p
 cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"   # no errors, no warnings from our code
 ctest --test-dir build --output-on-failure                       # 7/7 passed
-APP="build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge"
+APP="build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig"
 osascript -e 'set volume output volume 0'                        # safety backstop, restored to 31 afterwards
 # 1. Real CoreAudio devices, virtual Teams device, 5 s, quit via AppleScript -> exit 0:
 "$APP" --open="$SP/audio/Session A" --device="Microsoft Teams Audio" --output-level=-60
@@ -487,7 +487,7 @@ cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"   # no errors, no 
 ctest --test-dir build --output-on-failure                       # 3/3 passed
 python3 <scratchpad>/make_audio.py <scratchpad>/audio            # 2 folders + nested, mono/stereo,
                                                                  # 44.1/48/96 kHz, 16/24/32f, junk.wav
-APP="build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge"
+APP="build/ReampRig_artefacts/Release/Reamp Rig.app/Contents/MacOS/Reamp Rig"
 "$APP" --open="<audio>/Session A" --open="<audio>/Session B" --select="Riff 01.wav" \
        --select="Riff 02.wav" --select="Take 02.wav" --audition-at=3.2 --snapshot="$PWD/docs/phase2.png"
 "$APP" --open="<audio>/Session A" --select="Riff 01.wav" --view=2.9:3.6 --audition-at=3.2 \
@@ -520,7 +520,7 @@ Deviations from the spec (phase 2):
 ## Phase 1 — what was done (2026-09-30)
 
 - CMake project, JUCE 9.0.3 via `FetchContent` (release tarball pinned by SHA256).
-- App "Reamp Forge", bundle id `com.reampforge.app`, min window 1100×700, ad-hoc signed as a
+- App "Reamp Rig", bundle id `com.reamprig.app`, min window 1100×700, ad-hoc signed as a
   post-build step, `NSMicrophoneUsageDescription` in Info.plist.
 - Full layout from `PROMPT.md` section 5 with placeholder controls: top bar (name, device
   summary, sync chip, Start/Pause/Stop), file area with empty-state hint, 280 px scrolling
@@ -635,6 +635,14 @@ Deviations from the spec, all accepted:
 
 ## Decision log
 
+- 2026-10-01: **Renamed the app from "Reamp Forge" to "Reamp Rig"** (owner choice; "Studio"
+  rejected as generic). Product name, bundle id (`com.reamprig.app`), CMake targets
+  (`ReampRig`, `ReampRigTests`, artefacts under `build/ReampRig_artefacts`), top-bar logo,
+  settings folder, sidecar log name and temp-file suffix all changed. Old settings are copied
+  to the new location on first launch. GitHub repo renamed to `EdwardPayne/reamp-rig` (old
+  URL redirects). The local working folder is still `reamp-forge`; the `rf::` namespace is
+  kept. Older entries in this log keep the old name where they quote it. Snapshots before
+  phase 6 still show the old logo; phase 6 re-captures them.
 - 2026-09-30: JUCE over Tauri/Rust. Reason: a single duplex callback with a fixed in/out
   relationship is essential for sample-accurate sync; cpal has no merged synchronized CoreAudio
   duplex stream. See `PROMPT.md` section 2.

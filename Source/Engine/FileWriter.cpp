@@ -32,7 +32,7 @@ namespace rf::engine
 
     juce::File FileWriter::getTempFile (const juce::File& finalFile)
     {
-        return finalFile.getSiblingFile ("." + finalFile.getFileNameWithoutExtension() + ".reampforge-part"
+        return finalFile.getSiblingFile ("." + finalFile.getFileNameWithoutExtension() + ".reamprig-part"
                                          + finalFile.getFileExtension());
     }
 

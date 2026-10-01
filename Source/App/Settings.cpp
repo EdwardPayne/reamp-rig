@@ -138,8 +138,8 @@ namespace rf::app
     juce::PropertiesFile::Options Settings::makeOptions()
     {
         juce::PropertiesFile::Options options;
-        options.applicationName     = "Reamp Forge";
-        options.folderName          = "Reamp Forge";
+        options.applicationName     = "Reamp Rig";
+        options.folderName          = "Reamp Rig";
         options.filenameSuffix      = "settings";
         options.osxLibrarySubFolder = "Application Support";
         options.storageFormat       = juce::PropertiesFile::storeAsXML;
@@ -147,8 +147,36 @@ namespace rf::app
         return options;
     }
 
+    namespace
+    {
+        /*  The app was called "Reamp Forge" until 2026-10-01. On the first launch under the new
+            name, copy the old settings file (device config, sync measurements) so nothing is lost.
+            Only runs when the new file does not exist yet; the old file is left in place. */
+        juce::PropertiesFile::Options optionsWithLegacyMigration (juce::PropertiesFile::Options options)
+        {
+            const auto target = options.getDefaultFile();
+
+            if (! target.existsAsFile())
+            {
+                auto legacy = options;
+                legacy.applicationName = "Reamp Forge";
+                legacy.folderName      = "Reamp Forge";
+
+                const auto source = legacy.getDefaultFile();
+
+                if (source.existsAsFile())
+                {
+                    target.getParentDirectory().createDirectory();
+                    source.copyFileTo (target);
+                }
+            }
+
+            return options;
+        }
+    }
+
     Settings::Settings()
-        : file (std::make_unique<juce::PropertiesFile> (makeOptions()))
+        : file (std::make_unique<juce::PropertiesFile> (optionsWithLegacyMigration (makeOptions())))
     {
     }
 

@@ -5,7 +5,7 @@
 namespace rf::app
 {
     /*  The sidecar log of one batch (PROMPT.md 3.4.7): a plain-text file written next to the
-        results, "Reamp Forge batch <date> <time>.txt". One log per batch, placed in the
+        results, "Reamp Rig batch <date> <time>.txt". One log per batch, placed in the
         destination folder of the first file the batch handles (the output folder itself in
         single-folder mode, the first file's subfolder in subfolder mode). The header is
         written when the first file is known, then one entry is appended per file as it

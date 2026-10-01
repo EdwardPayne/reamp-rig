@@ -1,11 +1,11 @@
 # Tests
 
-JUCE `UnitTest` cases, built into the `ReampForgeTests` console app and run through ctest
+JUCE `UnitTest` cases, built into the `ReampRigTests` console app and run through ctest
 (one ctest entry per category):
 
 ```sh
 ctest --test-dir build --output-on-failure
-build/ReampForgeTests_artefacts/Release/ReampForgeTests --category=FolderScanner
+build/ReampRigTests_artefacts/Release/ReampRigTests --category=FolderScanner
 ```
 
 - `FolderScannerTests.cpp`: recursion on/off, order, dedupe, unreadable files skipped and
@@ -30,5 +30,5 @@ build/ReampForgeTests_artefacts/Release/ReampForgeTests --category=FolderScanner
 drives the callback and captures every output channel.
 
 Still to come (PROMPT.md section 7): SyncMeasurer and the keyed sync store in the settings
-round-trip (phase 5). To add a category, add the file to `ReampForgeTests` and the category
+round-trip (phase 5). To add a category, add the file to `ReampRigTests` and the category
 name to the `foreach` list in `CMakeLists.txt`.

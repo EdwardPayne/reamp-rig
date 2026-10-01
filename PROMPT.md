@@ -1,6 +1,6 @@
-# Reamp Forge — implementation prompt
+# Reamp Rig — implementation prompt
 
-You are implementing **Reamp Forge**, a desktop application for batch re-amping guitar DI (direct input) tracks through a hardware guitar amplifier via an audio interface. Read this whole document before writing any code. Decisions marked **DECIDED** are final; do not re-open them. If you are genuinely blocked, ask one precise question. Otherwise proceed.
+You are implementing **Reamp Rig**, a desktop application for batch re-amping guitar DI (direct input) tracks through a hardware guitar amplifier via an audio interface. Read this whole document before writing any code. Decisions marked **DECIDED** are final; do not re-open them. If you are genuinely blocked, ask one precise question. Otherwise proceed.
 
 The working directory is empty except for `idea.txt` (the original idea) and this file. There is no git repository and none is required for now.
 
@@ -19,7 +19,7 @@ Primary hardware: a Mac with a Universal Audio Apollo (Thunderbolt). During init
 - **Language/framework: C++20 with JUCE (latest stable 8.x, or 9.x if the toolchain builds it cleanly). Build with CMake, fetch JUCE with `FetchContent`** so the project builds from a clean checkout with only CMake, a C++ compiler and (on Mac) Xcode command line tools installed.
 - **Why JUCE, not Tauri/Electron/Rust+cpal:** the hard part of this app is sample-accurate, simultaneous play+record on one device. JUCE delivers input and output buffers in **one callback** (`AudioIODeviceCallback`) with a fixed, deterministic in/out relationship per device configuration, on CoreAudio (Mac) and ASIO/WASAPI (Windows). It also gives us driver-reported channel names, driver-reported latency, audio-file readers/writers, waveform thumbnails, native file drag-and-drop, and settings persistence in one dependency. Rust's `cpal` still has no merged synchronized CoreAudio duplex stream and ASIO support there is immature, so a Tauri build would put the riskiest part of the project on the weakest foundation.
 - **Cross-platform:** design and structure the code so it builds on macOS and Windows. **Develop and verify on macOS first.** Keep Windows-specific code isolated. Windows builds are expected to compile but are untested for now. Note for later: on Windows, the Apollo uses ASIO, which requires `JUCE_ASIO=1` and Steinberg's ASIO SDK on the build machine; WASAPI is the fallback.
-- **App type:** a single-window GUI app (not a plugin, not a CLI). App name `Reamp Forge`, bundle id placeholder `com.reampforge.app`.
+- **App type:** a single-window GUI app (not a plugin, not a CLI). App name `Reamp Rig`, bundle id placeholder `com.reamprig.app`.
 - **Fonts:** embed JetBrains Mono and Inter (both SIL OFL) as binary data via `juce_add_binary_data`, so the look is identical on every machine.
 - **Licenses:** only permissive dependencies (JUCE under its AGPLv3/commercial dual license is acceptable for this personal tool; fonts OFL). No other third-party libraries unless there is a strong reason; state it if you add one.
 
@@ -136,7 +136,7 @@ Every interactive control needs a tooltip. Keyboard: Space = audition selected /
 ## 6. Project structure
 
 ```
-reamp-forge/
+reamp-rig/
   CMakeLists.txt
   README.md                 build/run instructions, how to test with built-in mic/speakers
   ARCHITECTURE.md           threads, data flow, sync math

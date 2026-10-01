@@ -685,7 +685,7 @@ namespace rf::app
         const auto& c = audio.getSelectedConfig();
 
         juce::StringArray header;
-        header.add ("Reamp Forge " + appVersion() + " batch log");
+        header.add ("Reamp Rig " + appVersion() + " batch log");
         header.add ("Started      " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H:%M:%S"));
         header.add ("Device       " + c.typeName + dot() + audio.describeDevice (status)
                     + (c.isSplit() ? " (separate input and output devices: not sample-synchronized)" : juce::String()));
@@ -773,7 +773,7 @@ namespace rf::app
 
                 auto tempsLeft = 0;
 
-                for (const auto& f : naming.outputFolder.findChildFiles (juce::File::findFiles, true, "*.reampforge-part.wav",
+                for (const auto& f : naming.outputFolder.findChildFiles (juce::File::findFiles, true, "*.reamprig-part.wav",
                                                                          juce::File::FollowSymlinks::no))
                     tempsLeft += f.exists() ? 1 : 0;
 

@@ -137,7 +137,7 @@ namespace rf::ui
 
         g.setColour (colour::heading);
         g.setFont (Fonts::mono (type::brandSize, FontWeight::bold, type::brandTracking));
-        g.drawText ("REAMP FORGE", brand, juce::Justification::centredLeft, false);
+        g.drawText ("REAMP RIG", brand, juce::Justification::centredLeft, false);
 
         // Separator + device summary.
         g.setColour (colour::line);
@@ -168,7 +168,7 @@ namespace rf::ui
 
         const auto brandWidth = brandMarkSize + metric::grid
                               + juce::GlyphArrangement::getStringWidthInt (Fonts::mono (type::brandSize, FontWeight::bold, type::brandTracking),
-                                                                            "REAMP FORGE");
+                                                                            "REAMP RIG");
         brandArea = area.removeFromLeft (brandWidth);
         area.removeFromLeft (metric::grid * 4);
         deviceArea = area;

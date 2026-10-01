@@ -8,7 +8,7 @@
 #include "App/Snapshot.h"
 #include "UI/LookAndFeel.h"
 
-class ReampForgeApplication final : public juce::JUCEApplication
+class ReampRigApplication final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override       { return JUCE_APPLICATION_NAME_STRING; }
@@ -103,4 +103,4 @@ private:
     juce::uint32 snapshotTimeoutMs = 20000;
 };
 
-START_JUCE_APPLICATION (ReampForgeApplication)
+START_JUCE_APPLICATION (ReampRigApplication)

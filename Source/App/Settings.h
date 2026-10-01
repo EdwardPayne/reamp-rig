@@ -13,8 +13,8 @@
 namespace rf::app
 {
     /*  Per-user persistent settings (PROMPT.md section 3.7), an XML properties file at
-        ~/Library/Application Support/Reamp Forge/Reamp Forge.settings (macOS) or
-        %APPDATA%\Reamp Forge\Reamp Forge.settings (Windows).
+        ~/Library/Application Support/Reamp Rig/Reamp Rig.settings (macOS) or
+        %APPDATA%\Reamp Rig\Reamp Rig.settings (Windows).
 
         Message thread only. Typed accessors are added here as each phase needs them;
         the file list is deliberately never persisted. Changes are written shortly after they

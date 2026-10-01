@@ -12,7 +12,7 @@ namespace rf::app
             return false;
         }
 
-        const auto name = "Reamp Forge batch " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S");
+        const auto name = "Reamp Rig batch " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S");
         const auto candidate = folder.getNonexistentChildFile (name, ".txt", false);
 
         if (! candidate.replaceWithText (headerLines.joinIntoString ("\n") + "\n\n", false, false, "\n"))

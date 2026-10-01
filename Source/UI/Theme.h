@@ -2,7 +2,7 @@
 
 #include <juce_graphics/juce_graphics.h>
 
-/*  Reamp Forge design tokens (PROMPT.md section 5).
+/*  Reamp Rig design tokens (PROMPT.md section 5).
 
     Every colour and base metric used by the UI comes from here. Components and the
     LookAndFeel must not hard-code their own colour values.
