@@ -24,6 +24,10 @@ namespace rf::ui
 
         /** Enables the buttons for the batch state; Pause reads "Resume" while paused. */
         void setTransport (Transport);
+
+        /** Start is also disabled while something else owns the device (Sync measuring);
+            `reason` becomes Start's tooltip meanwhile. */
+        void setStartAllowed (bool allowed, const juce::String& reason = {});
         Transport getTransport() const noexcept   { return transport; }
 
         std::function<void()> onStart, onPauseResume, onSkip, onStop;
@@ -51,6 +55,8 @@ namespace rf::ui
         SyncChip syncChip;
         juce::TextButton startButton { "Start" }, pauseButton { "Pause" }, skipButton { "Skip" }, stopButton { "Stop" };
         Transport transport = Transport::idle;
+        bool startAllowed = true;
+        juce::String startTooltip;
 
         juce::Rectangle<int> brandArea, deviceArea;
         juce::String deviceTooltip;

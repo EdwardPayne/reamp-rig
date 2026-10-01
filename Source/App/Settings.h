@@ -3,7 +3,12 @@
 #include <juce_data_structures/juce_data_structures.h>
 
 #include "../Engine/AudioDeviceInterface.h"
+#include "../Engine/SyncMeasurement.h"
 #include "../Model/OutputNaming.h"
+
+#include <optional>
+#include <utility>
+#include <vector>
 
 namespace rf::app
 {
@@ -85,6 +90,28 @@ namespace rf::app
 
         /** All naming fields in one struct. */
         model::NamingOptions getNamingOptions() const;
+
+        //==============================================================================
+        // Sync (phase 5, PROMPT.md 3.6 and 3.7)
+
+        /** Level of the sync test signal, -60..0 dBFS, default -12. */
+        static constexpr float minSyncLevelDb = -60.0f;
+        static constexpr float maxSyncLevelDb = 0.0f;
+        static constexpr float defaultSyncLevelDb = -12.0f;
+        float getSyncLevelDb() const;
+        void setSyncLevelDb (float);
+
+        /** The keyed sync store: one measurement per device type + input device + output
+            device + sample rate + buffer size, kept as one XML value ("syncMeasurements").
+            Entries that do not parse or make no sense are ignored on read, so a hand-edited
+            file can never yield a bad measurement. */
+        std::optional<engine::SyncMeasurement> getSyncMeasurement (const engine::SyncKey&) const;
+
+        /** Adds or replaces the measurement for `key` (invalid keys are ignored). */
+        void setSyncMeasurement (const engine::SyncKey&, const engine::SyncMeasurement&);
+
+        /** Every valid entry, in stored order. */
+        std::vector<std::pair<engine::SyncKey, engine::SyncMeasurement>> getSyncMeasurements() const;
 
         //==============================================================================
         /** Writes pending changes now (also done automatically shortly after each change). */

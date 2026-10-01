@@ -58,7 +58,9 @@ namespace rf::ui
         setButtonStyle (skipButton,  ButtonStyle::secondary);
         setButtonStyle (stopButton,  ButtonStyle::secondary);
 
-        startButton.setTooltip ("Process every queued file from top to bottom.");
+        startTooltip = "Process every queued file from top to bottom. Without a sync measurement for the device "
+                       "configuration (top-bar chip), Start asks before using the driver's latency estimate.";
+        startButton.setTooltip (startTooltip);
         pauseButton.setTooltip ("Pause now: the current take is discarded and that file is recorded again "
                                 "from its start when you resume.");
         skipButton.setTooltip ("Skip the current file (marked Skipped) and continue with the next.");
@@ -79,7 +81,7 @@ namespace rf::ui
     {
         transport = t;
 
-        startButton.setEnabled (t == Transport::idle);
+        startButton.setEnabled (t == Transport::idle && startAllowed);
         pauseButton.setEnabled (t != Transport::idle);
         skipButton.setEnabled (t == Transport::running);
         stopButton.setEnabled (t != Transport::idle);
@@ -87,6 +89,13 @@ namespace rf::ui
         pauseButton.setButtonText (t == Transport::paused ? "Resume" : "Pause");
         setButtonStyle (pauseButton, t == Transport::paused ? ButtonStyle::primary : ButtonStyle::secondary);
         repaint();
+    }
+
+    void TopBar::setStartAllowed (bool allowed, const juce::String& reason)
+    {
+        startAllowed = allowed;
+        startButton.setTooltip (allowed || reason.isEmpty() ? startTooltip : reason);
+        setTransport (transport);
     }
 
     void TopBar::setDeviceSummary (const juce::String& summary, const juce::String& tooltip)

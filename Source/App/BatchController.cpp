@@ -1,4 +1,5 @@
 #include "BatchController.h"
+#include "SyncPlan.h"
 #include "../Engine/Resampler.h"
 #include "../UI/Format.h"
 #include "../UI/LookAndFeel.h"
@@ -120,10 +121,16 @@ namespace rf::app
     }
 
     //==============================================================================
-    void BatchController::start()
+    void BatchController::start (bool confirmedUnsynced)
     {
-        if (queue.isActive())
+        if (queue.isActive() || views.confirm.isShowing())
             return;
+
+        if (audio.isSyncActive())
+        {
+            views.statusBar.setMessage ("Cannot start while Sync measures", Tone::warning);
+            return;
+        }
 
         if (! audio.checkCanRecord())
             return;
@@ -134,6 +141,18 @@ namespace rf::app
         {
             views.statusBar.setMessage ("Cannot start: " + problem, Tone::warning);
             return;
+        }
+
+        // 3.6.4: every configuration this batch runs in needs a measurement, or a confirmation.
+        plannedKeys = getPlannedKeys();
+
+        if (! confirmedUnsynced)
+        {
+            if (const auto unsynced = describeUnsynced (plannedKeys); ! unsynced.isEmpty() && tree.countWithStatus (FileStatus::queued) > 0)
+            {
+                askToStartUnsynced (unsynced);
+                return;
+            }
         }
 
         if (queue.start (tree) == 0)
@@ -168,6 +187,55 @@ namespace rf::app
         juce::Logger::writeToLog ("Batch: " + juce::String (queue.getTotal()) + " files queued on "
                                   + audio.describeDevice (status));
         next();
+    }
+
+    std::vector<engine::SyncKey> BatchController::getPlannedKeys()
+    {
+        model::BatchQueue probe;
+        std::vector<double> rates;
+
+        if (probe.start (tree) > 0)
+            for (const auto& e : probe.getEntries())
+                rates.push_back (e.sampleRate);
+
+        return syncplan::keysForBatch (audio.getDeviceStatus(), rates);
+    }
+
+    juce::StringArray BatchController::describeUnsynced (const std::vector<engine::SyncKey>& keys) const
+    {
+        juce::StringArray result;
+
+        for (const auto& k : syncplan::missing (keys, [this] (const engine::SyncKey& key) { return audio.findSync (key); }))
+            result.add (audio.describeKey (k));
+
+        return result;
+    }
+
+    void BatchController::askToStartUnsynced (const juce::StringArray& unsynced)
+    {
+        const auto several = unsynced.size() > 1;
+
+        ui::ConfirmDialog::Content c;
+        c.title = "Not synced for this configuration";
+        c.intro = juce::String ("No latency measurement is stored for ")
+                + (several ? "these device configurations" : "this device configuration") + " used by the batch:";
+        c.items = unsynced;
+        c.note = "Start anyway uses the driver-reported latency as an estimate: those files are marked NC (not calibrated) "
+                 "in the list and the log and may be off by a few milliseconds. To measure instead, bypass the amp, connect "
+                 "the output directly to the input and press Sync"
+               + juce::String (several ? " at each sample rate." : ".");
+        c.confirmText = "Start anyway";
+        c.cancelText = "Cancel";
+
+        views.statusBar.setMessage ("Not synced for this configuration: " + unsynced.joinIntoString (", "), Tone::warning);
+
+        views.confirm.show (c, [this] (bool confirmed)
+        {
+            if (confirmed)
+                start (true);
+            else
+                views.statusBar.setMessage ("Start cancelled: not synced. Bypass the amp and press Sync to measure.", Tone::warning);
+        });
     }
 
     void BatchController::pauseResume()
@@ -335,6 +403,7 @@ namespace rf::app
 
         tree.setResult (currentId, FileStatus::recording, 0.0, 0, {}, {});
         views.fileList.setBatchState (currentId, true);
+        latencyNote = {};
 
         const auto channel = channelIndex (*item);
         views.waveform.setSource (item->file, item->info.numChannels, fileRate, item->info.lengthInSamples, channel);
@@ -400,8 +469,7 @@ namespace rf::app
 
         // Predict the device rate for it: its own rate if the device can run at it.
         const auto status = audio.getDeviceStatus();
-        const auto rate = status.sampleRates.contains (item->info.sampleRate) ? item->info.sampleRate : status.config.sampleRate;
-        const auto request = makeRequest (*item, rate);
+        const auto request = makeRequest (*item, syncplan::deviceRateFor (item->info.sampleRate, status));
 
         if (preloaded != nullptr && sameRequest (request, preloadedRequest))
             return;
@@ -426,13 +494,18 @@ namespace rf::app
 
         takeStatus = audio.getDeviceStatus();
 
-        // Latency (4.3): phase 5 measures it per device configuration. Until then the
-        // driver-reported input + output latency is the estimate, and every file says so.
+        // Latency (4.3, 3.6.4): the sync measurement stored for exactly the configuration this
+        // take runs in (the batch may have switched the rate for this file: every rate is its
+        // own key); without one, the driver-reported input + output latency as an estimate,
+        // and the file says so (NC).
+        takeSync = audio.findSync (takeStatus);
+        const auto latency = syncplan::chooseLatency (takeStatus, takeSync);
+
         engine::TakeSpec spec;
         spec.source = std::move (source);
         spec.deviceRate = takeStatus.config.sampleRate;
-        spec.latencySamples = juce::jmax (0, takeStatus.inputLatencySamples + takeStatus.outputLatencySamples);
-        spec.latencyMeasured = false;
+        spec.latencySamples = latency.samples;
+        spec.latencyMeasured = latency.measured;
         spec.tailSamples = (juce::int64) std::llround (tailMs * item->info.sampleRate / 1000.0);
         spec.outputFile = target.file;
         spec.bitsPerSample = bitsPerSample;
@@ -514,10 +587,15 @@ namespace rf::app
                      + dot() + "device " + format::sampleRate (spec.deviceRate) + ", buffer " + juce::String (takeStatus.config.bufferSize)
                      + dot() + "gain " + formatDb (audio.getEngine().getGainDb()) + " dB"
                      + dot() + "latency " + juce::String (spec.latencySamples) + " smp ("
-                     + (spec.latencyMeasured ? juce::String ("measured")
-                                             : "estimated: driver in " + juce::String (takeStatus.inputLatencySamples) + " + out "
-                                               + juce::String (takeStatus.outputLatencySamples) + ", not calibrated")
+                     + (spec.latencyMeasured && takeSync.has_value()
+                            ? "measured: " + format::milliseconds (takeSync->ms) + ", confidence " + engine::toString (takeSync->confidence)
+                              + ", synced " + format::dateTime (takeSync->date) + "; driver reports in "
+                              + juce::String (takeStatus.inputLatencySamples) + " + out " + juce::String (takeStatus.outputLatencySamples)
+                            : "estimated: driver in " + juce::String (takeStatus.inputLatencySamples) + " + out "
+                              + juce::String (takeStatus.outputLatencySamples) + ", not calibrated")
                      + ")" + dot() + "peak " + juce::String (juce::Decibels::gainToDecibels (r.peak, -120.0f), 1) + " dBFS");
+
+        latencyNote = "latency " + juce::String (spec.latencySamples) + " smp " + (spec.latencyMeasured ? "measured" : "estimated");
 
         if (r.hadDropout() || xruns > 0)
             details.add ("Dropouts: " + juce::String (xruns) + " driver xruns, " + juce::String (r.callbackGaps) + " callback gaps, "
@@ -595,7 +673,8 @@ namespace rf::app
                         + " (" + channel + ", " + format::sampleRate (rate) + "): " + model::toString (status)
                         + (output != juce::File() ? arrow() + output.getFullPathName() : juce::String())
                         + (note.isNotEmpty() ? " (" + note + ")" : juce::String())
-                        + (codes.isNotEmpty() ? " [" + codes + "]" : juce::String()));
+                        + (codes.isNotEmpty() ? " [" + codes + "]" : juce::String())
+                        + (latencyNote.isNotEmpty() ? ", " + latencyNote : juce::String()));
         }
     }
 
@@ -613,8 +692,23 @@ namespace rf::app
         header.add ("Output       " + c.outputChannelName + " (channel " + juce::String (c.outputChannel + 1) + ")" + dot()
                     + "level " + formatDb (audio.getEngine().getGainDb()) + " dB");
         header.add ("Input        " + c.inputChannelName + " (channel " + juce::String (c.inputChannel + 1) + ")");
-        header.add ("Latency      estimated from the driver-reported input + output latency, not calibrated "
-                    "(no sync measurement yet); per file below");
+        // One line per configuration the batch runs in: measured by Sync, or estimated.
+        for (size_t i = 0; i < plannedKeys.size(); ++i)
+        {
+            const auto& k = plannedKeys[i];
+            const auto m = audio.findSync (k);
+            const auto text = m.has_value()
+                ? "measured " + format::latency (m->samples, m->ms) + " at " + audio.describeKey (k) + " (Sync, confidence "
+                  + engine::toString (m->confidence) + ", returned " + juce::String (m->returnedPeakDb, 1) + " dBFS, "
+                  + format::dateTime (m->date) + ")"
+                : "estimated at " + audio.describeKey (k) + ": driver-reported input + output latency, not calibrated "
+                  "(no sync measurement; files marked NC)";
+
+            header.add ((i == 0 ? "Latency      " : "             ") + text);
+        }
+
+        header.add ("             driver reports in " + juce::String (status.inputLatencySamples) + " + out "
+                    + juce::String (status.outputLatencySamples) + " smp at the start; latency used per file below");
         header.add ("Format       WAV " + (bitsPerSample == 32 ? juce::String ("32-bit float") : juce::String (bitsPerSample) + "-bit")
                     + " at each source's sample rate" + dot() + "tail " + juce::String (tailMs) + " ms");
         header.add ("Destination  " + (naming.mode == model::DestinationMode::besideSource
@@ -791,7 +885,18 @@ namespace rf::app
                     + formatDb (audio.getEngine().getGainDb()) + " dB | destination "
                     + options.getNamingOptions().outputFolder.getFullPathName());
 
-        start();
+        // The check never waits for a click: an unsynced configuration counts as confirmed.
+        const auto keys = getPlannedKeys();
+
+        for (const auto& k : keys)
+        {
+            const auto m = audio.findSync (k);
+            printCheck ("sync " + audio.describeKey (k) + ": "
+                        + (m.has_value() ? "measured " + format::latency (m->samples, m->ms) + ", confidence " + engine::toString (m->confidence)
+                                         : juce::String ("not synced (started anyway: driver estimate, files marked NC)")));
+        }
+
+        start (true);
 
         if (! queue.isActive() && check.active)
         {

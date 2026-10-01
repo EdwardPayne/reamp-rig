@@ -6,6 +6,7 @@
 #include "../Engine/DeviceSession.h"
 #include "../Engine/DuplexEngine.h"
 #include "../Engine/SourceLoader.h"
+#include "../Engine/SyncMeasurement.h"
 #include "../UI/SidebarSections.h"
 #include "../UI/StatusBar.h"
 #include "../UI/TopBar.h"
@@ -25,7 +26,10 @@ namespace rf::app
         - asks for microphone access before opening an input (macOS) and explains a denial;
         - preloads the lead file's played channel on the loader thread (for audition and the
           "peak at output" readout) and runs audition through the DuplexEngine;
-        - polls the engine snapshot at 30 Hz for the meters and the waveform playhead.
+        - polls the engine snapshot at 30 Hz for the meters and the waveform playhead;
+        - phase 5: shows the stored sync measurement of the current configuration (top-bar
+          chip, SYNC readouts) after every device, rate or buffer change, and locks the AUDIO
+          controls while a batch or a sync measurement owns the device.
 
         It never touches engine internals: device state comes from DeviceStatus plus
         AudioDeviceInterface::Listener, engine state from EngineSnapshot.
@@ -75,8 +79,9 @@ namespace rf::app
 
         /** True if a take can record now: device open, output and input channel open (the
             input needs microphone access on macOS). Otherwise shows why in the status bar
-            (the same message as everywhere else, e.g. the microphone-denied one). */
-        bool checkCanRecord();
+            ("Cannot <action>: ...", the same reasons as everywhere else, e.g. the
+            microphone-denied message). */
+        bool checkCanRecord (const juce::String& action = "start");
 
         /** Reopens the device at `rate` for the batch (not saved). Returns the rate it runs at. */
         double switchSampleRate (double rate);
@@ -93,6 +98,27 @@ namespace rf::app
         /** Called with every engine snapshot (30 Hz, message thread). */
         std::function<void (const engine::EngineSnapshot&)> onSnapshot;
 
+        //==============================================================================
+        // Sync support (phase 5)
+
+        /** The stored measurement for the configuration the device runs in (none when closed). */
+        std::optional<engine::SyncMeasurement> findSync (const engine::DeviceStatus&) const;
+        std::optional<engine::SyncMeasurement> findSync (const engine::SyncKey&) const;
+
+        /** "Apollo Twin · 48 kHz · 256", "Out: … · In: … · 48 kHz · 512". */
+        juce::String describeKey (const engine::SyncKey&) const;
+
+        /** Re-reads the stored measurement for the current configuration into the top-bar
+            chip and the SYNC readouts (also done after every device change). */
+        void refreshSyncUi();
+
+        /** While Sync measures: audition stopped, AUDIO controls locked (like a batch). */
+        void setSyncActive (bool);
+        bool isSyncActive() const noexcept                          { return syncActive; }
+
+        /** Called with every engine snapshot before onSnapshot (the SyncController). */
+        std::function<void (const engine::EngineSnapshot&)> onSyncSnapshot;
+
         /** Called when the open device stops or disappears (message thread). */
         std::function<void()> onDeviceStopped;
 
@@ -104,6 +130,7 @@ namespace rf::app
         void requestMicrophoneIfNeeded();
         void showMicrophoneDenied();
         void refreshDeviceUi();
+        void refreshSyncUi (const engine::DeviceStatus&);
         void refreshPeakReadout();
         void wireControls();
         void userChangedConfig (const std::function<void (engine::DeviceConfig&)>& change);
@@ -111,6 +138,7 @@ namespace rf::app
         void sourceLoaded (std::shared_ptr<const engine::LoadedSource>, const juce::String& error);
         void updateAuditionCheck (const engine::EngineSnapshot&);
         void applyBatchLock();
+        void setLocks (bool batch, bool sync);
 
         Settings& settings;
         engine::AudioDeviceInterface& device;
@@ -141,6 +169,7 @@ namespace rf::app
         std::shared_ptr<const engine::LoadedSource> loaded;
         bool auditionPending = false;           // start as soon as the lead has loaded
         bool batchActive = false;
+        bool syncActive = false;
 
         struct AuditionCheck
         {

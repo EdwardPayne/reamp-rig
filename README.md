@@ -3,15 +3,16 @@
 Batch re-amping of guitar DI tracks through a hardware amp via an audio interface.
 Desktop app, C++20 + JUCE 9.0.3 (fetched automatically), CMake.
 
-Status: **phase 4 (engine + batch)**. Files and folders can be dropped or added, are scanned
+Status: **phase 5 (sync)**. Files and folders can be dropped or added, are scanned
 and listed grouped by folder with multi-select and L/R choice, and the selected file's waveform
 is shown with zoom and an audition start marker. The audio device, sample rate, buffer size and
 the output/input channels (with the driver's channel names) are chosen in the AUDIO section and
 remembered; input/output meters, the output level and Audition (Space) work. **Start** records
 every queued file through the amp: each file is played out of the output channel and the input
 is recorded in the same audio callback, latency-compensated to exactly the source's length (plus
-an optional tail), and written as WAV next to the source or into one folder. Latency is still
-the driver's estimate ("not calibrated"); measuring it (Sync) comes in phase 5.
+an optional tail), and written as WAV next to the source or into one folder. **Sync** measures
+the interface's real round-trip latency per device configuration; files recorded without a
+measurement fall back to the driver's estimate and are marked "not calibrated" (NC).
 
 ## Requirements
 
@@ -92,6 +93,35 @@ have finished. Combine it with `--open=` and the development flags `--select=<fi
 (repeatable, first one is shown in the waveform panel), `--audition-at=<seconds>` and
 `--view=<start>:<end>` to capture a populated window (see `Source/App/CommandLine.h`).
 
+## Sync (latency calibration)
+
+Do this once per interface setup, before the first batch, and again whenever the AUDIO section
+says "NOT SYNCED" (top-bar chip):
+
+1. **Bypass the amp.** Connect the chosen output channel directly to the chosen input channel
+   with a cable (line out into line in; no amp, no pedals).
+2. Leave **Sync level** at -12 dBFS (lower it if the result says "clipped", raise it or the
+   interface's input gain if it says "level too low").
+3. Press **Sync**. A click and a short sweep are played and recorded five times (about six
+   seconds; the cells under the readouts fill as it goes, Stop cancels). The SYNC section then
+   shows the round trip (`556 smp · 11.6 ms`), the returned peak, the confidence (high / medium /
+   low; hover for the details) and the date, next to the driver's own figure for reference. The
+   top-bar chip turns green with the measured value.
+4. **Reconnect the amp** (output into the amp, the amp's mic or DI into the input) and run the
+   batch.
+
+A measurement belongs to the driver, the input and output device, the sample rate and the buffer
+size; changing any of them shows "NOT SYNCED" until that configuration is measured (an earlier
+measurement comes back when you switch back). The batch switches the device to each file's sample
+rate, so measure every rate your files use: set the rate in the AUDIO section, press Sync, repeat.
+If the batch would run in a configuration without a measurement, **Start** asks first ("Not synced
+for this configuration", listing them); **Start anyway** uses the driver's estimate and marks those
+files **NC**. Failures (nothing came back, no clear peak, level too low, clipped, not repeatable,
+dropouts) are explained in the SYNC section and the status bar, and never replace a good
+measurement. With the built-in speakers and microphone Sync measures through the room: it works at
+a low level but is "not sample-synchronized" (separate devices), so expect medium or low
+confidence.
+
 ## Batch processing
 
 1. Add files, pick the L/R channel of stereo files, set the AUDIO section (one interface for
@@ -107,7 +137,8 @@ have finished. Combine it with `--open=` and the development flags `--select=<fi
    again from its start on **Resume**; **Skip** skips the current file; **Stop** ends the batch
    (the current file stays queued). Each result is written under a hidden temporary name and
    renamed when complete, so an interrupted take never leaves a half-written file.
-4. The list shows status, progress and warning badges: **NC** not calibrated (latency estimated),
+4. The list shows status, progress and warning badges: **NC** not calibrated (latency estimated
+   because the configuration had no sync measurement),
    **RS** resampled (the device could not run at the file's rate), **XR** dropout, **SIL** recorded
    silence?, **CLIP** clipped (hover for details). "Redo files with warnings" (right-click, or the
    header button) queues the files with dropouts, silence or clipping again.
@@ -150,12 +181,23 @@ success), `--batch-check=<folder>` (runs a real batch of the opened files into `
 virtual loopback device, prints one line per file plus a verification of every output, exits 0
 if all are exact; `--batch-check-transport` also exercises Pause/Resume, Skip and Stop;
 `--batch-check-hardware` allows the selected real device, without the content check) and
-`--sidebar-scroll=<section>` (for snapshots). Examples without touching any hardware:
+`--sidebar-scroll=<section>` (for snapshots), `--sync-check` (runs Sync on the virtual loopback,
+prints every repeat and the result, stores it, exits 0 when it matches the loop's true round trip;
+`--sync-check-hardware` allows the selected real device, `--sync-check-rates=44100,96000` also
+measures those rates, `--sync-level=<dBFS>` sets the level for the run; with `--batch-check` the
+batch runs afterwards in the same process), `--virtual-reported-latency=<n>` (the virtual device
+reports a wrong driver latency), `--settings-file=<path>` (use another settings file, so checks do
+not touch yours) and `--press-start` (presses Start after loading, e.g. to snapshot the "Not
+synced" dialog). Examples without touching any hardware:
 
 ```sh
 APP="build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge"
 "$APP" --virtual-device --open="$HOME/DI/Session A" --select="Riff 01.wav" --output-level=-30 --audition-check=2
 "$APP" --open="$HOME/DI/Session A" --output-level=0 --virtual-speed=8 --batch-check=/tmp/reamp-check
+"$APP" --settings-file=/tmp/check.settings --virtual-loopback=1500 --sync-check
+"$APP" --settings-file=/tmp/check.settings --open="$HOME/DI/Session A" --output-level=0 --virtual-loopback=300 \
+       --virtual-reported-latency=100 --virtual-speed=8 --sync-check --sync-check-rates=44100,96000 \
+       --batch-check=/tmp/reamp-check
 ```
 
 See `Source/App/CommandLine.h` for details.
@@ -167,16 +209,16 @@ CMakeLists.txt
 Assets/Fonts/     JetBrains Mono + Inter (Regular/Medium/Bold) and their OFL licences
 Source/Main.cpp   application entry point
 Source/App/       main window, root component, Settings, AudioController, BatchController,
-                  BatchLog, OutputOptions, microphone permission, command line, macOS
-                  appearance, snapshot aid
+                  BatchLog, OutputOptions, SyncController, SyncPlan, microphone permission,
+                  command line, macOS appearance, snapshot aid
 Source/UI/        Theme (design tokens), Fonts, Format, LookAndFeel, TopBar, FileTreeView,
-                  Sidebar + sections, Meters, WaveformPanel, StatusBar
+                  Sidebar + sections, Meters, WaveformPanel, StatusBar, ConfirmDialog
 Source/Engine/    AudioDeviceInterface, JuceAudioDevice, DeviceSession, DuplexEngine, RecordStream,
-                  Take, FileWriter, Resampler, SourceLoader, LoopbackTestDevice (SyncMeasurer in phase 5)
+                  Take, FileWriter, Resampler, SourceLoader, LoopbackTestDevice, SyncMeasurer
 Source/Model/     FileItem, FileTree, FolderScanner, BatchQueue, OutputNaming
 Tests/            JUCE UnitTest runner and tests (FolderScanner, FileTree, FileTreeView, Settings,
                   DeviceSession, DuplexEngine, SourceLoader, Resampler, Loopback end to end, Take,
-                  OutputNaming, BatchQueue) and a fake audio device
+                  OutputNaming, BatchQueue, Sync) and a fake audio device
 ```
 
 See `ARCHITECTURE.md` for the thread and data-flow design, `PROMPT.md` for the full

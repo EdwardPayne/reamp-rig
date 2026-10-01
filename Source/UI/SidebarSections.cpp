@@ -16,6 +16,7 @@ namespace rf::ui
         constexpr int noticeHeight   = 32;   // two lines
         constexpr int meterHeight    = 18;
         constexpr int sliderTextBoxWidth = 72;
+        constexpr int syncTextBoxWidth = 88;
 
         juce::String emDash()   { return utf8 ("\xe2\x80\x94"); }
 
@@ -102,10 +103,52 @@ namespace rf::ui
     }
 
     //==============================================================================
+    void RepeatProgress::setProgress (int repeatsDone, int repeatsTotal, double current)
+    {
+        done = repeatsDone;
+        total = juce::jmax (1, repeatsTotal);
+        fraction = juce::jlimit (0.0, 1.0, current);
+        repaint();
+    }
+
+    void RepeatProgress::paint (juce::Graphics& g)
+    {
+        constexpr int cellWidth = 22, cellHeight = 10, cellGap = 4;
+        auto area = getLocalBounds();
+
+        const auto label = "Repeat " + juce::String (juce::jmin (done + 1, total)) + " / " + juce::String (total);
+        g.setColour (theme::colour::faint);
+        g.setFont (Fonts::mono (theme::type::fieldLabelSize));
+        g.drawText (label, area, juce::Justification::centredLeft, false);
+
+        auto cells = area.removeFromRight (total * cellWidth + (total - 1) * cellGap);
+
+        for (int i = 0; i < total; ++i)
+        {
+            auto cell = cells.removeFromLeft (cellWidth).withSizeKeepingCentre (cellWidth, cellHeight);
+            cells.removeFromLeft (cellGap);
+
+            g.setColour (theme::colour::line);
+            g.drawRect (cell, 1);
+
+            const auto filled = i < done ? 1.0 : i == done ? fraction : 0.0;
+
+            if (filled > 0.0)
+            {
+                g.setColour (theme::colour::accent);
+                g.fillRect (cell.withWidth (juce::roundToInt (cell.getWidth() * filled)));
+            }
+        }
+    }
+
+    //==============================================================================
     SyncSection::SyncSection()
         : SidebarSection ("Sync"),
-          measured ("Measured", emDash()),
-          driver   ("Driver",   emDash())
+          measured   ("Measured",      emDash()),
+          peak       ("Returned peak", emDash()),
+          confidence ("Confidence",    emDash()),
+          date       ("Measured on",   emDash()),
+          driver     ("Driver",        emDash())
     {
         hint.setText ("Connect the output directly to the input (bypass the amp) before measuring.",
                       juce::dontSendNotification);
@@ -115,16 +158,64 @@ namespace rf::ui
         hint.setBorderSize (juce::BorderSize<int> (0));
         hint.setMinimumHorizontalScale (1.0f);
 
-        measured.setTooltip ("Round-trip latency measured for this device configuration.");
-        driver.setTooltip ("Input + output latency reported by the driver.");
+        level.setSliderStyle (juce::Slider::LinearHorizontal);
+        level.setTextBoxStyle (juce::Slider::TextBoxRight, false, syncTextBoxWidth, sliderHeight);
+        level.setRange (-60.0, 0.0, 0.5);
+        level.setValue (-12.0, juce::dontSendNotification);
+        level.setDoubleClickReturnValue (true, -12.0);
+        level.setTextValueSuffix (" dBFS");
+        level.setNumDecimalPlacesToDisplay (1);
+        level.setTooltip ("Peak level of the sync test signal at the output (-60 to 0 dBFS, default -12). "
+                          "The output level control does not apply to it. Double-click for -12 dBFS.");
+
+        measured.setTooltip ("Round trip measured for the current device configuration.");
+        peak.setTooltip ("Peak level of the test signal as it came back on the input.");
+        confidence.setTooltip ("How clearly and how repeatably the test signal was found.");
+        date.setTooltip ("When the stored measurement for this configuration was made.");
+        driver.setTooltip ("Input + output latency reported by the driver (reference only).");
+        progress.setTooltip ("The test signal is played and recorded five times; the median is used.");
 
         setButtonStyle (syncButton, ButtonStyle::primary);
         syncButton.setTooltip ("Measure the round-trip latency of the current output/input pair.");
 
         addRow ({ { {}, &hint } }, hintHeight);
+        addRow ({ { "Sync level", &level } }, sliderHeight);
         addRow ({ { {}, &measured } }, readoutHeight);
+        addRow ({ { {}, &peak } }, readoutHeight);
+        addRow ({ { {}, &confidence } }, readoutHeight);
+        addRow ({ { {}, &date } }, readoutHeight);
         addRow ({ { {}, &driver } }, readoutHeight);
+        addRow ({ { {}, &failure } }, noticeHeight);
+        addRow ({ { {}, &progress } }, readoutHeight);
         addRow ({ { {}, &syncButton } }, metric::controlHeight);
+
+        setRowVisible (failure, false);
+        setRowVisible (progress, false);
+    }
+
+    void SyncSection::setMeasuring (bool isMeasuring)
+    {
+        measuring = isMeasuring;
+        syncButton.setButtonText (isMeasuring ? "Stop" : "Sync");
+        setButtonStyle (syncButton, isMeasuring ? ButtonStyle::secondary : ButtonStyle::primary);
+        syncButton.repaint();
+        setRowVisible (progress, isMeasuring);
+
+        if (isMeasuring)
+            setFailure ({}, {}, theme::colour::warn);
+    }
+
+    void SyncSection::setProgress (int repeatsDone, int repeatsTotal, double current)
+    {
+        progress.setProgress (repeatsDone, repeatsTotal, current);
+    }
+
+    void SyncSection::setFailure (const juce::String& text, const juce::String& detail, juce::Colour tone)
+    {
+        failure.setText (text);
+        failure.setTone (tone);
+        failure.setTooltip (detail);
+        setRowVisible (failure, text.isNotEmpty());
     }
 
     //==============================================================================

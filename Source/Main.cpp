@@ -27,12 +27,15 @@ public:
         const auto options = rf::app::LaunchOptions::parse (getCommandLineParameterArray(),
                                                             juce::File::getCurrentWorkingDirectory());
 
-        settings = std::make_unique<rf::app::Settings>();
+        settings = options.settingsFile.has_value() ? std::make_unique<rf::app::Settings> (*options.settingsFile)
+                                                    : std::make_unique<rf::app::Settings>();
         mainWindow = std::make_unique<rf::app::MainWindow> (getApplicationName(), *settings, options);
 
         std::function<void (bool)> onCheckDone;
 
-        if ((options.auditionCheckSeconds.has_value() || options.batchCheckFolder.has_value()) && ! options.snapshotFile.has_value())
+        const auto anyCheck = options.auditionCheckSeconds.has_value() || options.batchCheckFolder.has_value() || options.syncCheck;
+
+        if (anyCheck && ! options.snapshotFile.has_value())
             onCheckDone = [this] (bool ok)
             {
                 setApplicationReturnValue (ok ? 0 : 1);
@@ -41,8 +44,9 @@ public:
 
         mainWindow->getMainComponent().applyLaunchOptions (options, onCheckDone);
 
-        // A mid-batch snapshot may have to wait for several files to be recorded.
-        if (options.batchCheckFolder.has_value())
+        // A mid-batch snapshot may have to wait for several files to be recorded, a sync check
+        // for several measurements.
+        if (options.batchCheckFolder.has_value() || options.syncCheck)
             snapshotTimeoutMs = 300000;
 
         if (options.snapshotFile.has_value())

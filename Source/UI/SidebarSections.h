@@ -5,9 +5,9 @@
 
 namespace rf::ui
 {
-    /*  The four sidebar sections. AUDIO (phase 3), DESTINATION and OPTIONS (phase 4) are
-        live; SYNC shows the driver latency and gets its measurement in phase 5. The sections
-        only own and lay out their controls; the app wires them to settings and the engine.
+    /*  The four sidebar sections: AUDIO (phase 3), SYNC (phase 5), DESTINATION and OPTIONS
+        (phase 4). The sections only own and lay out their controls; the app wires them to
+        settings and the engine.
     */
 
     class AudioSection final : public SidebarSection
@@ -44,18 +44,58 @@ namespace rf::ui
         juce::TextButton auditionButton { "Audition" };
     };
 
+    /** Five cells filling as the sync repeats run, with "Repeat 2 / 5" beside them. */
+    class RepeatProgress final : public juce::Component,
+                                 public juce::SettableTooltipClient
+    {
+    public:
+        /** `current` is the fraction (0..1) of the repeat in progress. */
+        void setProgress (int repeatsDone, int repeatsTotal, double current);
+        void paint (juce::Graphics&) override;
+
+    private:
+        int done = 0, total = 5;
+        double fraction = 0.0;
+    };
+
+    /*  SYNC (phase 5, PROMPT.md 3.6): the bypass hint, the sync level, the stored measurement
+        for the current configuration (round trip, returned peak, confidence, date), the
+        driver's latency for reference, a failure line, the repeat progress while measuring,
+        and the Sync button (Stop while measuring). The app fills the readouts.
+    */
     class SyncSection final : public SidebarSection
     {
     public:
         SyncSection();
 
-        /** Driver-reported input + output latency (reference for phase 5's measurement). */
-        ValueReadout& getDriverReadout() noexcept   { return driver; }
+        juce::Slider& getLevelSlider() noexcept         { return level; }
+        juce::TextButton& getSyncButton() noexcept      { return syncButton; }
+
+        ValueReadout& getMeasuredReadout() noexcept     { return measured; }
+        ValueReadout& getPeakReadout() noexcept         { return peak; }
+        ValueReadout& getConfidenceReadout() noexcept   { return confidence; }
+        ValueReadout& getDateReadout() noexcept         { return date; }
+
+        /** Driver-reported input + output latency (reference next to the measurement). */
+        ValueReadout& getDriverReadout() noexcept       { return driver; }
+
+        /** Measuring: the button reads "Stop" and the repeat progress shows. */
+        void setMeasuring (bool);
+        bool isMeasuring() const noexcept               { return measuring; }
+        void setProgress (int repeatsDone, int repeatsTotal, double current);
+
+        /** A failure line under the readouts (empty text hides it); `detail` is its tooltip. */
+        void setFailure (const juce::String& text, const juce::String& detail, juce::Colour tone);
+        const juce::String& getFailure() const noexcept { return failure.getText(); }
 
     private:
         juce::Label hint;
-        ValueReadout measured, driver;
+        juce::Slider level;
+        ValueReadout measured, peak, confidence, date, driver;
+        NoticeLine failure { {} };
+        RepeatProgress progress;
         juce::TextButton syncButton { "Sync" };
+        bool measuring = false;
     };
 
     class DestinationSection final : public SidebarSection

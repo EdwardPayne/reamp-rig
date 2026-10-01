@@ -336,7 +336,7 @@ namespace rf::app
         // The preview must be at the device rate: reload the lead after a rate change.
         const auto status = device.getStatus();
 
-        if (! batchActive && leadFile != juce::File() && status.isOpen
+        if (! batchActive && ! syncActive && leadFile != juce::File() && status.isOpen
             && ! juce::approximatelyEqual (loadedRequest.targetSampleRate, status.config.sampleRate))
         {
             if (duplex.isAuditioning())
@@ -439,18 +439,8 @@ namespace rf::app
         const auto summary = waitingForPermission ? juce::String ("Waiting for microphone access") : describeDevice (status);
         views.topBar.setDeviceSummary (summary, status.isOpen ? summary : "No audio device is open.");
 
-        if (status.isOpen)
-            views.topBar.setSyncStatus ("Not synced", colour::warn,
-                                        "No latency measurement for this device configuration yet. "
-                                        "Run Sync before processing files.");
-        else
-            views.topBar.setSyncStatus ("No device", colour::muted, "No audio device is open.");
-
-        if (status.isOpen)
-            views.sync.getDriverReadout().setValue ("in " + juce::String (status.inputLatencySamples)
-                                                    + " + out " + juce::String (status.outputLatencySamples) + " smp");
-        else
-            views.sync.getDriverReadout().setValue (emDash());
+        // Any device, rate or buffer change re-checks the stored sync value (4.4).
+        refreshSyncUi (status);
 
         if (! status.isOpen)
         {
@@ -502,7 +492,7 @@ namespace rf::app
         leadFile = file;
         leadChannel = channel;
 
-        if (batchActive)
+        if (batchActive || syncActive)
         {
             loader.cancel();
             loaded.reset();
@@ -596,9 +586,10 @@ namespace rf::app
     //==============================================================================
     void AudioController::toggleAudition()
     {
-        if (batchActive)
+        if (batchActive || syncActive)
         {
-            views.statusBar.setMessage ("Audition is off while the batch runs", Tone::warning);
+            views.statusBar.setMessage (batchActive ? "Audition is off while the batch runs" : "Audition is off while Sync measures",
+                                        Tone::warning);
             return;
         }
 
@@ -696,6 +687,9 @@ namespace rf::app
 
         updateAuditionCheck (snap);
 
+        if (onSyncSnapshot != nullptr)
+            onSyncSnapshot (snap);
+
         if (snap.auditionFinished)
         {
             stopAudition();
@@ -707,12 +701,115 @@ namespace rf::app
     }
 
     //==============================================================================
-    bool AudioController::checkCanRecord()
+    std::optional<engine::SyncMeasurement> AudioController::findSync (const engine::DeviceStatus& status) const
+    {
+        if (! status.isOpen)
+            return std::nullopt;
+
+        return findSync (engine::SyncKey::from (status));
+    }
+
+    std::optional<engine::SyncMeasurement> AudioController::findSync (const engine::SyncKey& key) const
+    {
+        return settings.getSyncMeasurement (key);
+    }
+
+    juce::String AudioController::describeKey (const engine::SyncKey& k) const
+    {
+        const auto split = k.inputDevice.isNotEmpty() && k.outputDevice.isNotEmpty() && k.inputDevice != k.outputDevice;
+        const auto names = split ? "Out: " + k.outputDevice + dot() + "In: " + k.inputDevice
+                                 : (k.outputDevice.isNotEmpty() ? k.outputDevice : k.inputDevice);
+
+        return names + dot() + format::sampleRate (k.sampleRate) + dot() + juce::String (k.bufferSize);
+    }
+
+    void AudioController::refreshSyncUi()
+    {
+        refreshSyncUi (device.getStatus());
+    }
+
+    void AudioController::refreshSyncUi (const engine::DeviceStatus& status)
+    {
+        auto& s = views.sync;
+        auto& measured = s.getMeasuredReadout();
+        auto& peak = s.getPeakReadout();
+        auto& confidence = s.getConfidenceReadout();
+        auto& date = s.getDateReadout();
+        auto& driver = s.getDriverReadout();
+
+        if (! status.isOpen)
+        {
+            views.topBar.setSyncStatus ("No device", colour::muted, "No audio device is open.");
+
+            for (auto* r : { &measured, &peak, &confidence, &date, &driver })
+                r->setValue (emDash());
+
+            return;
+        }
+
+        const auto where = describeKey (engine::SyncKey::from (status));
+        const auto driverTotal = status.inputLatencySamples + status.outputLatencySamples;
+        const auto rate = juce::jmax (1.0, status.config.sampleRate);
+        const auto driverText = "in " + juce::String (status.inputLatencySamples) + " + out "
+                              + juce::String (status.outputLatencySamples) + " = " + juce::String (driverTotal) + " smp ("
+                              + format::milliseconds (driverTotal * 1000.0 / rate) + ")";
+
+        driver.setValue ("in " + juce::String (status.inputLatencySamples) + " + out " + juce::String (status.outputLatencySamples) + " smp");
+
+        if (const auto m = findSync (status))
+        {
+            const auto value = format::latency (m->samples, m->ms);
+            const auto difference = m->samples - driverTotal;
+            const auto conf = engine::toString (m->confidence);
+            const auto summary = "Measured round trip for " + where + ": " + value + ", returned peak "
+                               + juce::String (m->returnedPeakDb, 1) + " dBFS, confidence " + conf + ", measured on "
+                               + format::dateTime (m->date) + ".";
+
+            views.topBar.setSyncStatus (value, colour::ok,
+                                        summary + " Takes in this configuration discard exactly " + juce::String (m->samples)
+                                            + " samples. The driver reports " + driverText + ".");
+
+            measured.setValue (value, colour::ok);
+            measured.setTooltip (summary);
+            peak.setValue (juce::String (m->returnedPeakDb, 1) + " dBFS");
+            confidence.setValue (conf, m->confidence == engine::SyncConfidence::high ? std::optional<juce::Colour> (colour::ok)
+                                     : m->confidence == engine::SyncConfidence::low  ? std::optional<juce::Colour> (colour::warn)
+                                                                                      : std::nullopt);
+            confidence.setTooltip ("Peak-to-sidelobe ratio " + juce::String (m->peakToSidelobeDb, 1) + " dB; "
+                                   + juce::String (m->repeatsUsed) + " of " + juce::String (m->repeatsTotal)
+                                   + ui::utf8 (" repeats within Â±") + "1 sample. High: every repeat agrees and the ratio is at "
+                                     "least 20 dB. Medium: all but one agree and at least 12 dB. Low: otherwise.");
+            date.setValue (format::dateTime (m->date));
+            driver.setTooltip ("Input + output latency reported by the driver: " + driverText + ". Reference only: the "
+                               "measured " + juce::String (m->samples) + " smp is used (difference "
+                               + (difference > 0 ? "+" : "") + juce::String (difference) + " smp).");
+        }
+        else
+        {
+            views.topBar.setSyncStatus ("Not synced", colour::warn,
+                                        "No sync measurement for " + where + ". Takes would use the driver's estimate ("
+                                            + driverText + ") and be marked NC (not calibrated). Bypass the amp, connect the "
+                                              "output to the input and press Sync.");
+
+            measured.setValue ("not synced", colour::warn);
+            measured.setTooltip ("No measurement stored for " + where + ".");
+            confidence.setTooltip ("How clearly and how repeatably the test signal was found.");
+
+            for (auto* r : { &peak, &confidence, &date })
+                r->setValue (emDash());
+
+            driver.setTooltip ("Input + output latency reported by the driver: " + driverText
+                               + ". Used as an estimate until this configuration is measured.");
+        }
+    }
+
+    //==============================================================================
+    bool AudioController::checkCanRecord (const juce::String& action)
     {
         const auto status = device.getStatus();
-        auto refuse = [this] (const juce::String& why)
+        auto refuse = [this, action] (const juce::String& why)
         {
-            views.statusBar.setMessage ("Cannot start: " + why, Tone::warning);
+            views.statusBar.setMessage ("Cannot " + action + ": " + why, Tone::warning);
             return false;
         };
 
@@ -759,16 +856,29 @@ namespace rf::app
 
     void AudioController::setBatchActive (bool active)
     {
-        if (active == batchActive)
-            return;
+        setLocks (active, syncActive);
+    }
 
-        if (active)
+    void AudioController::setSyncActive (bool active)
+    {
+        setLocks (batchActive, active);
+    }
+
+    void AudioController::setLocks (bool batch, bool sync)
+    {
+        const auto wasLocked = batchActive || syncActive;
+
+        batchActive = batch;
+        syncActive = sync;
+
+        const auto locked = batchActive || syncActive;
+
+        if (locked && ! wasLocked)
             stopAudition();
 
-        batchActive = active;
         applyBatchLock();
 
-        if (! active)
+        if (wasLocked && ! locked)
         {
             views.audio.getOutputLevel().setEnabled (true);
             views.audio.getAuditionButton().setEnabled (true);
@@ -784,7 +894,7 @@ namespace rf::app
 
     void AudioController::applyBatchLock()
     {
-        if (! batchActive)
+        if (! batchActive && ! syncActive)
             return;   // refreshDeviceUi has set the normal enabled states
 
         auto& a = views.audio;

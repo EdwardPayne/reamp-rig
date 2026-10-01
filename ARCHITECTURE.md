@@ -1,16 +1,15 @@
 # Reamp Forge architecture
 
-Current through phase 4. Sections marked *planned* describe the design from PROMPT.md section 4
-that later phases implement (the sync measurement, phase 5).
+Current through phase 5 (sync). Everything described here is implemented.
 
 ## Modules
 
 | Module          | Depends on                | Contents |
 |-----------------|---------------------------|----------|
-| `Source/Engine` | JUCE core/events/audio modules only | `AudioDeviceInterface`, `JuceAudioDevice`, `DeviceSession`, `DuplexEngine` (audition, take, meters), `RecordStream` (record FIFO), `Take`, `FileWriter` (writer thread), `Resampler`, `SourceLoader`, `LoopbackTestDevice`; *planned:* `SyncMeasurer` |
+| `Source/Engine` | JUCE core/events/audio modules only | `AudioDeviceInterface`, `JuceAudioDevice`, `DeviceSession`, `DuplexEngine` (audition, take, meters), `RecordStream` (record FIFO), `Take`, `FileWriter` (writer thread), `Resampler`, `SourceLoader`, `LoopbackTestDevice`, `SyncMeasurer` + `SyncMeasurement` (sync key and stored value) |
 | `Source/Model`  | JUCE core/events/audio formats | `FileItem` (status, warnings, output), `FileTree`, `FolderScanner`, `BatchQueue`, `OutputNaming` |
-| `Source/UI`     | JUCE GUI, Model, Engine API | Theme tokens, embedded fonts, `ForgeLookAndFeel`, the view components |
-| `Source/App`    | everything                | JUCE application, main window, `Settings`, `AudioController` (device/audition glue), `BatchController` (batch glue), `BatchLog` (sidecar log), `OutputOptions` (DESTINATION/OPTIONS binding), `MicrophonePermission`, command line (`--open`, dev flags), snapshot (dev aid) |
+| `Source/UI`     | JUCE GUI, Model, Engine API | Theme tokens, embedded fonts, `ForgeLookAndFeel`, the view components, `ConfirmDialog` (themed in-window confirmation) |
+| `Source/App`    | everything                | JUCE application, main window, `Settings`, `AudioController` (device/audition glue), `BatchController` (batch glue), `BatchLog` (sidecar log), `OutputOptions` (DESTINATION/OPTIONS binding), `SyncController` (SYNC section, measurement runs), `SyncPlan` (which measurement a batch needs and uses), `MicrophonePermission`, command line (`--open`, dev flags), snapshot (dev aid) |
 
 The Engine has **no dependency on the GUI**. The UI never reaches into engine internals; it reads
 a thread-safe state snapshot and receives change notifications on the message thread.
@@ -43,7 +42,10 @@ a thread-safe state snapshot and receives change notifications on the message th
    current one records). Phase 2 already has two background threads of this kind: the **folder
    scanner** thread and the **thumbnail** thread owned by `juce::AudioThumbnailCache` (the
    recorded lane has its own one-entry cache for a finished take read from disk).
-4. **Message thread**: UI, settings persistence, device configuration, batch control. Polls the
+4. **Sync analysis thread** (`SyncMeasurer`'s worker, "Sync analysis", phase 5): lives for one
+   measurement; drains each repeat's `RecordStream` into memory (polling every 2 ms, like the
+   writer) and runs the FFT cross-correlation. No file is written.
+5. **Message thread**: UI, settings persistence, device configuration, batch control. Polls the
    engine snapshot (`DuplexEngine::poll()`) at 30 Hz for meters, playhead, take progress and
    status; device state arrives as `DeviceStatus` copies plus `AudioDeviceInterface::Listener`
    notifications.
@@ -76,8 +78,9 @@ a thread-safe state snapshot and receives change notifications on the message th
   tail`. With tail 0 the file is exactly as long as the source and sample-aligned with it. With a
   unity loop at 0 dB it is bit-exact (the loopback test proves it for buffers 64/256/480/1024 and
   delays from 0 to 3000 samples). `latency` is the round trip in device samples, supplied by the
-  caller: until phase 5 measures it, the BatchController uses the driver-reported input + output
-  latency and marks every file "not calibrated" (status badge NC, sidecar log).
+  caller: the BatchController uses the sync measurement stored for exactly the configuration the
+  take runs in (see "Sync measurement"), else the driver-reported input + output latency as an
+  estimate, and then marks the file "not calibrated" (status badge NC, sidecar log).
 - **Exact PCM.** JUCE's `writeFromFloatArrays` scales by 2^31 - 1 and would turn a 24-bit value
   `k` into `k - 1` above -6 dBFS. The writer converts itself (`round (x * 2^(bits-1))`, clamped,
   left-justified), the exact inverse of how JUCE reads PCM, and writes 32-bit as IEEE float.
@@ -122,6 +125,84 @@ a thread-safe state snapshot and receives change notifications on the message th
   -80 dB; JUCE's interpolator used in phase 3 reached about -40 dB and is no longer used. Passband
   to about 0.447 of the lower rate (19.7 kHz at 44.1 kHz). Material with energy above that (hard
   cuts, as in the synthetic test files) loses it; that is band-limiting, not misalignment.
+
+## Sync measurement (phase 5, implemented)
+
+```
+ SyncController (message thread) ── start ──▶ SyncMeasurer ── startTake (LoadedSource = test signal) ──▶ DuplexEngine
+   SYNC section, chip, Settings               │  update (engine snapshot, 30 Hz)                         audio thread: the normal
+                                               ▼                                                           take path, nothing new
+                                     worker thread "Sync analysis": RecordStream ─▶ recording ─▶ FFT correlation ─▶ SyncRepeat
+                                               │  5 repeats ─▶ combine (outliers, median, confidence) ─▶ SyncResult
+                                               ▼
+                         Settings keyed store (only on success) ─▶ BatchController looks up each take's configuration
+```
+
+- **Path.** The measurement uses the batch's own engine path: `DuplexEngine::startTake` with an
+  in-memory `LoadedSource` holding the test signal at the device rate and a `RecordStream` big
+  enough for the whole repeat. Output starts at signal sample 0 in the callback where capture
+  starts, so the lag at which the signal comes back is exactly the `latency` a take discards. The
+  audio thread does nothing it does not already do for a take. The engine gain is set to 0 dB for
+  the measurement (the level is absolute) and restored afterwards; audition is stopped and the
+  AUDIO controls and Start are locked meanwhile.
+- **Test signal** (`makeTestSignal`): a one-sample click at the level, 5 ms of silence, then a
+  50 ms exponential sine sweep from 200 Hz to min(20 kHz, 0.45 × rate), Hann-faded over 2 ms at
+  both ends. Peak = the sync level (default -12 dBFS, -60..0 dBFS, persisted). About 2650 samples
+  at 48 kHz. The sweep carries almost all of the correlation energy; the click is the audible
+  marker the spec asks for.
+- **Recording**: 1 s per repeat, longer when the driver-reported latency needs it
+  (`max (1 s, signal + 2 × driver estimate + 0.1 s)`), so round trips up to about 0.94 s are found
+  by default.
+- **Correlation** (`analyse`): `corr[k] = sum recording[i + k] · signal[i]` for every lag with the
+  whole signal inside the recording (0 .. n - m), computed with `juce::dsp::FFT` (real-only
+  transforms, zero-padded to the next power of two ≥ n + m, `X · conj (S)`, inverse). The round trip
+  is the lag of the largest **|corr|** (a polarity flip still gives the right lag; it is reported).
+  Integer samples only, exact: a pure delay with gain has its autocorrelation maximum at exactly
+  that lag.
+- **Per-repeat checks and thresholds** (constants in `SyncMeasurer.h`):
+
+  | check | threshold | outcome |
+  |---|---|---|
+  | any recorded sample ≥ 0.9999 | `DuplexEngine::clipLevel` | clipped (the measurement stops at once) |
+  | recording peak below -90 dBFS | `silenceDb` | nothing came back |
+  | peak-to-sidelobe ratio below 8 dB | `minPeakToSidelobeDb` | no clear peak |
+  | returned peak (largest sample where the signal came back) below -60 dBFS | `minReturnedDb` | level too low |
+  | samples lost to the FIFO or a callback gap | | dropout |
+
+  Peak-to-sidelobe ratio = |corr| at the peak over the largest |corr| more than 2 periods of the
+  sweep's start frequency (10 ms, 480 samples at 48 kHz) away from it. A clean loop gives 43.7 dB;
+  pure noise 0-1 dB; the built-in speakers + microphone about 16-17 dB.
+- **Combination** (`combine`): 5 repeats; the run stops early when clipped or when three repeats
+  have failed (five can no longer give three good ones). Of the good repeats, those more than
+  **±1 sample** from their median are outliers; at least **3** must agree, else "not repeatable"
+  (the delays are listed). Result = the median of the agreeing repeats; returned peak and
+  peak-to-sidelobe ratio are their medians. **Confidence**: *high* = all 5 agree and ratio ≥ 20 dB;
+  *medium* = at least 4 agree and ratio ≥ 12 dB; *low* otherwise (stored, shown in `warn`).
+  With fewer than 3 good repeats the most frequent failure is reported: nothing came back, no
+  clear peak, level too low, dropouts. Failures, a cancel and a stalled device (no progress for
+  2 s) never store anything; an older measurement for that configuration stays.
+- **Keyed store** (`Settings`, `engine::SyncKey` / `engine::SyncMeasurement`): key = driver type +
+  input device + output device + sample rate + buffer size (channels are not part of it); value =
+  samples, ms (derived from samples and rate when read), returned peak dBFS, peak-to-sidelobe dB,
+  repeats used / total, confidence, date. Stored as one XML value `syncMeasurements`
+  (`<SYNC><MEASUREMENT type input output rate buffer samples ms peakDb psrDb used total confidence
+  date/>…</SYNC>`). Reading validates every entry (numbers, a key that makes sense, 0 < samples ≤
+  10 s, a known confidence word) and ignores the ones that do not; an unreadable date leaves the
+  entry valid with an unknown date. A new measurement replaces the old one for its key only.
+- **Use** (`SyncPlan`, `BatchController`): every take looks up the measurement for the
+  configuration it runs in (`takeStatus`; the batch switches the rate per file group, so each rate
+  is its own key). With one: `latencyMeasured = true`, no NC. Without: the driver estimate and NC.
+  Before Start, the current configuration and each rate the queued files will switch the device to
+  (`deviceRateFor`: the file's rate if the device offers it, else the current one) are checked;
+  missing ones are listed in the themed "Not synced for this configuration" dialog (Start anyway /
+  Cancel). `--batch-check` counts as confirmed. The sidecar log's Latency header has one line per
+  configuration (measured with value, confidence and date, or estimated) and every file entry says
+  which latency it used.
+- **Display** (`AudioController::refreshSyncUi`, after every device, rate or buffer change and after
+  a measurement): the top-bar chip shows `1234 SMP · 25.7 MS` in `ok` when the current configuration
+  has a measurement, `NOT SYNCED` in `warn` otherwise (`NO DEVICE` muted when closed); the SYNC
+  section shows measured value, returned peak, confidence (ratio and agreement in its tooltip),
+  date, and the driver's `in N + out M smp` next to it for reference.
 
 ## Batch (phase 4, implemented)
 
@@ -197,7 +278,8 @@ a thread-safe state snapshot and receives change notifications on the message th
   persisted (`Settings::setDeviceConfig`, `setOutputGainDb`). Warnings and errors go to the
   status bar and the log. It fills the AUDIO combos from `DeviceStatus`, shows the split-device
   notice, the top-bar summary (`Apollo Twin · 48 kHz · 256`, "No device" when closed), the sync
-  chip ("No device" / "Not synced" until phase 5) and the driver latency in the SYNC section.
+  chip and the SYNC readouts (stored measurement or "Not synced", phase 5) and the driver latency
+  in the SYNC section.
 - **Microphone permission (macOS, `MicrophonePermission.mm`)**: `AVCaptureDevice`
   authorization status and a non-blocking request. Important finding: because JUCE's aggregate
   device carries *all* streams of its sub-devices, creating any CoreAudio device that has input
@@ -326,7 +408,8 @@ is message-thread only.
 - `--virtual-device` is this device paced in real time with the loop off (silent inputs), named
   "Virtual Interface" (it replaces phase 3's `VirtualAudioDevice`); `--virtual-loopback=<n>`
   turns the loop on, `--virtual-rates` restricts its rates (to force resampling) and
-  `--virtual-speed` runs it faster than real time. `--batch-check` uses it.
+  `--virtual-speed` runs it faster than real time, `--virtual-reported-latency=<n>` makes its
+  driver latency wrong on purpose. `--batch-check` and `--sync-check` use it.
 
 ## Waveform thumbnails (phase 2, implemented)
 
@@ -360,9 +443,11 @@ file). It is owned by the application object and passed to the main window. Keys
 phase 4: `tailMs` (0..60000, default 0), `prefix` (""), `suffix` ("_reamp"), `destinationMode`
 (`subfolder` default / `singleFolder`), `subfolderName` ("Reamped"; empty reads as the default),
 `outputFolder` (absolute path or empty), `mirrorStructure` (on), `channelTag` (off), `bitDepth`
-(16 / 24 default / 32 float), `collisionPolicy` (`autoNumber` default / `overwrite` / `skip`).
+(16 / 24 default / 32 float), `collisionPolicy` (`autoNumber` default / `overwrite` / `skip`);
+phase 5: `syncLevelDb` (-60..0, default -12) and `syncMeasurements` (the keyed sync store, see
+"Sync measurement").
 `App/OutputOptions` binds the DESTINATION and OPTIONS controls to these keys (saved on every
-change). Phase 5 adds the keyed sync store here.
+change). `--settings-file=<path>` points the app at another file (development checks).
 Hand-edited garbage falls back to safe values. The file list is never persisted.
 
 ## Tests
@@ -372,7 +457,9 @@ dependency, and the code under test uses JUCE types throughout. `Tests/TestMain.
 console app (`ReampForgeTests`) that runs every test or one category
 (`--category=<name>`) and exits non-zero on any failure. CMake registers one ctest entry per
 category (`FolderScanner`, `FileTree`, `FileTreeView`, `Settings`, `DeviceSession`,
-`DuplexEngine`, `SourceLoader`, `Resampler`, `Loopback`, `Take`, `OutputNaming`, `BatchQueue`).
+`DuplexEngine`, `SourceLoader`, `Resampler`, `Loopback`, `Take`, `OutputNaming`, `BatchQueue`,
+`Sync`). `Tests/LoopbackRig.h` holds the loopback device setup, test files and the take `Rig`
+shared by `Loopback` and `Sync`.
 `Loopback` is the end-to-end engine test (files on disk -> SourceLoader -> DuplexEngine ->
 LoopbackTestDevice -> RecordStream -> FileWriter -> file on disk, compared sample by sample). Device logic runs against `Tests/FakeAudioDevice.h`, a
 scriptable `AudioDeviceInterface` (types, devices, named channels, rates, buffer sizes, failing

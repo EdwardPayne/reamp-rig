@@ -255,8 +255,14 @@ namespace rf::ui
 
     //==============================================================================
     NoticeLine::NoticeLine (juce::String t)
-        : text (std::move (t))
+        : text (std::move (t)), tone (colour::warn)
     {
+    }
+
+    void NoticeLine::setTone (juce::Colour c)
+    {
+        tone = c;
+        repaint();
     }
 
     void NoticeLine::setText (const juce::String& t)
@@ -272,10 +278,10 @@ namespace rf::ui
 
         // Badge aligned with the first line; the text may wrap onto a second line.
         drawBadge (g, area.removeFromLeft (badgeSize).removeFromTop (metric::fieldLabelHeight)
-                          .withSizeKeepingCentre (badgeSize, badgeSize).toFloat(), "!", colour::warn);
+                          .withSizeKeepingCentre (badgeSize, badgeSize).toFloat(), "!", tone);
         area.removeFromLeft (metric::grid);
 
-        g.setColour (colour::warn);
+        g.setColour (tone);
         g.setFont (Fonts::mono (type::fieldLabelSize));
         g.drawFittedText (text, area, juce::Justification::topLeft, 2, 1.0f);
     }

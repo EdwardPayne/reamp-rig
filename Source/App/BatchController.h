@@ -9,6 +9,7 @@
 #include "../Engine/Take.h"
 #include "../Model/BatchQueue.h"
 #include "../Model/FileTree.h"
+#include "../UI/ConfirmDialog.h"
 #include "../UI/FileTreeView.h"
 #include "../UI/StatusBar.h"
 #include "../UI/TopBar.h"
@@ -30,8 +31,12 @@ namespace rf::app
           of one rate form a group) or else plays a resampled source and resamples the
           recording back ("resampled" warning), loads the played channel on the batch's own
           SourceLoader (the next file is preloaded there while the current one records), and
-          runs an engine::Take with the latency estimate (driver-reported input + output
-          latency, "not calibrated" until phase 5 measures it).
+          runs an engine::Take with the latency of the configuration that take runs in: the
+          stored sync measurement for exactly that device, rate and buffer (phase 5), else
+          the driver-reported input + output latency as an estimate ("not calibrated", NC).
+        - Start first checks the current configuration and every rate the batch will switch
+          to; if any has no sync measurement it asks in a themed dialog ("Not synced for this
+          configuration", Start anyway / Cancel). --batch-check counts as confirmed.
         - Progress: row status and progress bar, the highlighted current row, the batch
           playhead and the live recorded lane in the waveform panel, and the status line
           "File 7 of 23 — 00:12 / 01:03 — ETA 14:20" (ETA = remaining audio at the speed
@@ -54,12 +59,15 @@ namespace rf::app
             ui::StatusBar& statusBar;
             ui::WaveformPanel& waveform;
             ui::FileTreeView& fileList;
+            ui::ConfirmDialog& confirm;
         };
 
         BatchController (AudioController&, model::FileTree&, OutputOptions&, Views);
         ~BatchController() override;
 
-        void start();
+        /** Start. Without a sync measurement for a configuration the batch will run in, asks
+            for confirmation first unless `confirmedUnsynced`. */
+        void start (bool confirmedUnsynced = false);
         void pauseResume();
         void skipCurrent();
         void stop();
@@ -117,6 +125,12 @@ namespace rf::app
 
         engine::LoadRequest makeRequest (const model::FileItem&, double deviceRate) const;
 
+        /** The configurations the queued files will run in (current first) and which of them
+            have no sync measurement. */
+        std::vector<engine::SyncKey> getPlannedKeys();
+        juce::StringArray describeUnsynced (const std::vector<engine::SyncKey>&) const;
+        void askToStartUnsynced (const juce::StringArray& unsynced);
+
         AudioController& audio;
         model::FileTree& tree;
         OutputOptions& options;
@@ -133,6 +147,8 @@ namespace rf::app
         std::shared_ptr<const engine::LoadedSource> preloaded;
         model::OutputNaming::Target target;
         engine::DeviceStatus takeStatus;    // device state when the take started
+        std::optional<engine::SyncMeasurement> takeSync;   // the measurement the take uses, if any
+        juce::String latencyNote;           // "latency 556 smp measured" for --batch-check lines
         int xrunsAtStart = -1;
         double lastProgress = -1.0;
 
@@ -140,6 +156,7 @@ namespace rf::app
         model::NamingOptions naming;
         int bitsPerSample = 24, tailMs = 0;
         engine::DeviceConfig startConfig;
+        std::vector<engine::SyncKey> plannedKeys;   // configurations of this run (log header)
         BatchLog log;
         bool logTried = false;
         double startedMs = 0.0, pausedSinceMs = 0.0, pausedTotalMs = 0.0;

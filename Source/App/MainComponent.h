@@ -5,6 +5,7 @@
 #include "../Engine/JuceAudioDevice.h"
 #include "../Model/FileTree.h"
 #include "../Model/FolderScanner.h"
+#include "../UI/ConfirmDialog.h"
 #include "../UI/FileTreeView.h"
 #include "../UI/Sidebar.h"
 #include "../UI/StatusBar.h"
@@ -16,6 +17,7 @@
 #include "CommandLine.h"
 #include "OutputOptions.h"
 #include "Settings.h"
+#include "SyncController.h"
 
 namespace rf::app
 {
@@ -36,7 +38,8 @@ namespace rf::app
         Owns the audio device and the AudioController (phase 3); Space toggles audition.
         Phase 4: the OutputOptions binding (DESTINATION, OPTIONS) and the BatchController
         (transport, per-file status, recorded lane); while a batch runs the waveform panel
-        follows the batch instead of the selection.
+        follows the batch instead of the selection. Phase 5: the SyncController (SYNC
+        section) and the themed confirmation dialog, an overlay above everything else.
     */
     class MainComponent final : public juce::Component,
                                 public juce::FileDragAndDropTarget,
@@ -53,8 +56,8 @@ namespace rf::app
         void addPaths (const juce::Array<juce::File>&, std::function<void()> onAdded = {});
 
         /** Opens the audio device and applies --open plus the development aids (see
-            CommandLine.h). `onCheckDone` is called when --audition-check or --batch-check
-            finishes. */
+            CommandLine.h). `onCheckDone` is called when --audition-check, --sync-check or
+            --batch-check (after --sync-check when both are given) finishes. */
         void applyLaunchOptions (const LaunchOptions&, std::function<void (bool ok)> onCheckDone = {});
 
         /** True while scans are pending or the selected file's waveform is still building. */
@@ -86,6 +89,7 @@ namespace rf::app
         ui::WaveformPanel waveformPanel;
         ui::Sidebar sidebar;
         ui::StatusBar statusBar;
+        ui::ConfirmDialog confirmDialog;
 
         juce::StretchableLayoutManager splitLayout;
         juce::StretchableLayoutResizerBar splitter { &splitLayout, 1, false };
@@ -95,6 +99,7 @@ namespace rf::app
         // detaches the audio callback before the device goes away.
         std::unique_ptr<engine::AudioDeviceInterface> audioDevice;
         std::unique_ptr<AudioController> audio;
+        std::unique_ptr<SyncController> sync;
         std::unique_ptr<OutputOptions> outputOptions;
         std::unique_ptr<BatchController> batch;     // destroyed first: cancels a running take
 

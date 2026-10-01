@@ -11,72 +11,193 @@ Phases are defined in `PROMPT.md` section 8; requirements are numbered per `PROM
 | 2 | Files + waveform | **Done** | 2026-09-30, clean Release build, 3/3 ctest entries pass, launched with `--open`, snapshots checked | `docs/phase2.png`, `docs/phase2-zoom.png` |
 | 3 | Audio device layer | **Done** | 2026-09-30, clean Release build, 7/7 ctest entries pass (59 cases, 323 checks), launched on real CoreAudio devices, `--audition-check` passed on the virtual device, snapshots checked | `docs/phase3.png`, `docs/phase3-audition.png` |
 | 4 | Engine + batch | **Done** | 2026-10-01, clean Release build, 12/12 ctest entries pass (164 cases, 1095 checks), `--batch-check` passed on the virtual loopback device (rate switching, forced resampling, pause/resume/skip/stop), outputs compared with a script, a quiet real-hardware batch passed, launched on real CoreAudio devices, snapshot checked | `docs/phase4.png` |
-| 5 | Sync | Not started | | |
+| 5 | Sync | **Done** | 2026-10-01, clean Release build, 13/13 ctest entries pass (196 cases, 1382 checks), `--sync-check` exact on the virtual loopback at delays 37/300/1500, sync then `--batch-check` in one process: 7/7 Done without NC and bit-exact against a deliberately wrong driver estimate, acoustic sync on the built-in speakers + mic passed (medium confidence), launched on real CoreAudio devices, snapshots checked | `docs/phase5.png`, `docs/phase5-dialog.png` |
 | 6 | Polish | Not started | | |
 
 Environment used so far: macOS 26.6 (Apple Silicon), CMake 3.27.8, Apple Clang 21, Xcode
 Command Line Tools only, no Ninja. JUCE 9.0.3 fetched by CMake. Clean build about 1 minute.
 Terminal now has microphone access on the development Mac (the phase 4 hardware check recorded).
 
-## Next up: phase 5 — sync
+## Next up: phase 6 — polish
 
-Spec: `PROMPT.md` section 3.6 (Sync button with the "bypass the amp" line; click + ~50 ms
-exponential sweep at an adjustable level, default -12 dBFS, ~1 s recording, cross-correlation
-peak, 5 repeats, outliers discarded, median; result in samples and ms, returned peak level,
-confidence from peak-to-sidelobe ratio and repeatability within ±1 sample; plain-language
-failures for no peak / too low / clipped, never store a bad measurement; store keyed by device
-type + device name(s) + sample rate + buffer size; "Not synced for this configuration" warning
-next to Start with a confirmation to start anyway; driver latency shown next to the measured
-value), 3.7 (the keyed store is persisted), 4.4 (any rate or buffer change re-checks the stored
-value) and section 7 (**SyncMeasurer tests**: known delay at several delays, with noise, with a
-gain change, with a clipped return, a silent return rejected; **Settings round-trip of the keyed
-sync store**).
+Spec: `PROMPT.md` section 8 phase 6 ("tooltips, keyboard shortcuts, error states, dropout
+detection, xrun redo, window state, final pass on visuals against the reference site") and the
+rules in section 5. Deliver, in this order:
 
-Deliver: `Source/Engine/SyncMeasurer`, the SYNC section live (level control, Sync button,
-measured readout with ms and confidence, failure messages), the top-bar chip and the Start
-warning, the keyed store in `Settings`, tests, docs, `docs/phase5.png`.
+1. **Owner requests (2026-10-01):**
+   - **Pause between files** in OPTIONS, seconds, default **2 s**, persisted (`Settings`, typed
+     accessor + round-trip test). `BatchController::next()` waits that long after a file is
+     written before the next take starts (a message-thread timer, not a sleep); the status line
+     shows the wait ("File 4 of 7 — next in 2 s"); Pause/Stop/Skip work during the wait; the ETA
+     counts it.
+   - **Never scan the output subfolder as a source**: with "Include subfolders" on, skip any
+     subfolder whose name equals the configured subfolder name (default "Reamped"), and say so in
+     the status bar ("Skipped Reamped (output folder)"). `FolderScanner::scan` gets the name;
+     extend `FolderScannerTests`.
+2. **App icon**: black square with the accent mark like the top-bar logo, `ICON_BIG`/`ICON_SMALL`
+   in `juce_add_gui_app` (`CFBundleIconFile`), so Finder and the Dock no longer show a generic
+   icon.
+3. **Window size and position remembered** (`PROMPT.md` 3.7 and section 5): save on move/resize
+   and quit, restore on launch, clamp to a visible display and the 1100×700 minimum.
+4. **Tooltips everywhere**: audit every interactive control (all of them should have one; check
+   the SYNC level slider, the dialog buttons, the file list header buttons, the waveform
+   scrollbar, the meters) and make texts consistent.
+5. **Keyboard shortcuts** (section 5): Space = audition selected / stop, Delete = remove
+   selected, cmd/ctrl-A = select all, L / R = set channel on selection. They exist; verify them
+   with the confirmation dialog open (it takes Escape/Return and swallows the rest), while Sync
+   measures and while a batch runs, and document them (README + tooltips).
+6. **Error states**: device disappears during a take or a sync (the sync stops after 2 s without
+   progress; the batch pauses), disk full / unwritable destination mid-batch, microphone denied,
+   no output channel; every case a plain-language status-bar message with the right tone and a
+   recovery path. Re-open the device by itself when it comes back (open issue below).
+7. **Dropout detection and xrun redo**: exists since phase 4 (XR badge, "Redo files with
+   warnings"); review the gap thresholds on real hardware and decide with the owner whether NC
+   files should be redoable once their configuration is synced (they are not today).
+8. **Final visual pass** against https://plugins.omarchy.org and section 5 (spacing on the 8 px
+   grid, label tracking, disabled states, the dialog, the new SYNC rows), with snapshots
+   `docs/phase6*.png`.
+9. The rest of "Open issues" below, each closed or re-filed with a reason:
+   - **manual mouse pass** with the owner (phases 2-5 list: clicks, L/R, context menus, drag and
+     drop, zoom, the AUDIO/DESTINATION/OPTIONS/SYNC controls, the transport, the dialog buttons);
+   - **first cabled sync on the Apollo** (expect high confidence) and a batch with it; repeat the
+     acoustic built-in check once to see how much the split pair drifts between sessions;
+   - **device comes back**: reopen the saved device by itself when it reappears;
+   - decide with the owner: a "measure all rates" action, deleting stored measurements, NC files
+     in "Redo files with warnings", the thumbnail resolution at maximum zoom, hidden selected
+     files in collapsed groups;
+   - keep as known limits (document in the README if still true): band-limiting of resampled
+     takes, memory per loaded file (current + next, audition preview), gap detection on a loaded
+     machine, Windows untested (ASIO/WASAPI, type switching, sync), the stale Command Line Tools
+     headers on this Mac (owner decides), microphone prompts attributed to Terminal.
 
-Hooks left by phase 4 for phase 5:
+Hooks left by phase 5:
 
-- **Where the latency enters a take:** `BatchController::startTake` (`Source/App/BatchController.cpp`)
-  sets `spec.latencySamples` to the driver-reported input + output latency and
-  `spec.latencyMeasured = false`. Replace that with a lookup in the keyed store for the device
-  status of *this* take (`takeStatus`: type, input/output device, `config.sampleRate`,
-  `config.bufferSize`); with a stored measurement set `latencyMeasured = true` and the file gets
-  no NC warning (the warning, the sidecar entry and the badge all follow `TakeResult::notCalibrated`).
-  Look it up per file, not once per batch: the batch switches the device rate per file group
-  (`BatchQueue::getGroups`), and every rate is its own key. The sidecar header's "Latency" line is
-  fixed text in `BatchController::openLog`; make it say measured or estimated.
-- **Engine path for the measurement:** `DuplexEngine::startTake (source, recordLength, stream)`
-  already plays an in-memory `LoadedSource` from sample 0 and captures the input into a
-  `RecordStream` in the same callback. A SyncMeasurer can build the click + sweep as a
-  `LoadedSource` at the device rate, start a take with `recordLength` ≈ 1 s and drain the stream
-  itself (no FileWriter) on a worker thread, then correlate; repeat 5 times. Do not reuse
-  `engine::Take` for it (that one always writes a file). Keep the audio thread untouched.
-- **Tests:** `engine::LoopbackTestDevice` has everything section 7 asks for: round trip =
-  `bufferSize + delay` (`getRoundTripSamples()`), `gain` (> 1 gives a clipped return), `noise`,
-  `loop = false` for a silent return, and `reportedInputLatency/reportedOutputLatency` to make the
-  driver estimate wrong on purpose. Drive it with `render()`; see `Tests/LoopbackTests.cpp` (`Rig`).
-- **Keyed sync store in `Settings`:** add typed accessors next to `getDeviceConfig` (for example
-  `getSyncMeasurement (const SyncKey&)` / `setSyncMeasurement`), key = type + input device +
-  output device + sample rate + buffer size, value = samples, ms, peak, confidence, date. Store as
-  one XML child or a `key -> value` property set in the same `PropertiesFile`; extend
-  `Tests/SettingsTests.cpp` (round trip, several keys, garbage).
-- **Top-bar chip:** `AudioController::refreshDeviceUi` always sets "Not synced" (warn) when a
-  device is open; make it "OK"/the measured value (ok colour) when the current
-  `DeviceStatus` has a stored measurement, "Not synced" otherwise. `refreshDeviceUi` already runs
-  after every device, rate or buffer change, including the batch's own rate switches.
-- **Start warning:** `BatchController::start` is the place. Before starting, check the current
-  configuration *and* each rate the batch will switch to (the entries' rates the device
-  supports); if any has no measurement, show the prominent "Not synced for this configuration"
-  warning next to Start and ask for confirmation (a themed dialog, no stock look); on confirm,
-  run as now (estimate + NC on those files). `--batch-check` must keep working without a prompt
-  (add a flag or treat the check as confirmed).
-- **SYNC section:** `ui::SyncSection` has the hint, `measured` and `driver` readouts and a Sync
-  button that is not wired; `getDriverReadout()` is already filled by AudioController. The level
-  control (default -12 dBFS) still has to be added.
-- Real numbers seen so far: the virtual loopback reports its exact round trip; the built-in
-  speakers + microphone (split devices, 48 kHz, 512) report in 3482 + out 1346 = 4828 samples.
+- `SyncController::isBusy()` / `AudioController::isSyncActive()` tell whether a measurement owns
+  the device; anything new that touches the engine (the pause timer) must respect it and
+  `isBatchActive()`.
+- `ui::ConfirmDialog` is the app's only modal; reuse it for any other confirmation (it is a
+  child of `MainComponent`, so snapshots capture it).
+- `--settings-file` isolates every check from the owner's settings; keep using it.
+- `--press-start`, `--sync-check[-rates|-hardware]`, `--sync-level`, `--virtual-reported-latency`
+  are in `Source/App/CommandLine.h`.
+
+## Phase 5 — what was done (2026-10-01)
+
+- `Source/Engine/`: **`SyncMeasurer`** (PROMPT.md 3.6): test signal = one-sample click, 5 ms gap,
+  50 ms exponential sweep 200 Hz to min(20 kHz, 0.45 fs), 2 ms Hann fades, peak at the sync level;
+  each repeat runs through `DuplexEngine::startTake` with an in-memory `LoadedSource` and a
+  `RecordStream` (no FileWriter, no `engine::Take`) at an engine gain of 0 dB (restored), records
+  1 s (longer if the driver estimate needs it), and its own worker thread ("Sync analysis") drains
+  the stream and cross-correlates with `juce::dsp::FFT`; peak of |corr| = round trip in samples.
+  5 repeats, outliers > ±1 sample from the median discarded, at least 3 must agree, median of the
+  rest; returned peak, peak-to-sidelobe ratio, confidence high/medium/low; failures in plain
+  language (nothing came back, no clear peak, level too low, clipped, not repeatable, dropouts,
+  device stopped, cancelled), never stored. Algorithm and thresholds in `ARCHITECTURE.md`
+  ("Sync measurement"). **`SyncMeasurement.h`**: `SyncKey` (type + input + output device + rate +
+  buffer) and `SyncMeasurement` (samples, ms, returned peak, ratio, repeats, confidence, date).
+  The audio thread is untouched.
+- **Keyed store** in `Settings` (`getSyncMeasurement` / `setSyncMeasurement` /
+  `getSyncMeasurements`, one XML value, entry-by-entry validation) and `syncLevelDb` (-60..0,
+  default -12).
+- **Use in the batch**: `SyncPlan` (pure: `deviceRateFor`, `keysForBatch`, `missing`,
+  `chooseLatency`). `BatchController::startTake` looks up the configuration of *that* take
+  (`takeStatus`, so each rate group uses its own key): measured → `latencyMeasured`, no NC;
+  otherwise the driver estimate and NC. Per-file log line says "measured: … ms, confidence …,
+  synced <date>; driver reports …" or "estimated: … not calibrated"; the log header has one Latency
+  line per configuration of the batch. **Start warning**: before a batch, the current
+  configuration and every rate the queued files switch to are checked; missing ones are listed in
+  the themed **`ui::ConfirmDialog`** "Not synced for this configuration" (Start anyway / Cancel,
+  Return / Escape) and in the status bar. `--batch-check` treats it as confirmed and prints which
+  configurations are synced.
+- **UI**: SYNC section: hint, **Sync level** slider (dBFS, persisted, double-click -12), Measured
+  (`556 smp · 11.6 ms`, ok colour; "not synced" in warn), Returned peak, Confidence (high ok /
+  medium / low warn; ratio and agreement in the tooltip), Measured on (date), Driver
+  (`in N + out M smp`, tooltip with the sum and the difference to the measurement), a failure line
+  (warn/error badge, full message in the tooltip), five repeat cells while measuring, Sync button
+  (Stop while measuring). **Top-bar chip**: measured value in ok, NOT SYNCED in warn, NO DEVICE
+  muted; refreshed after every device, rate or buffer change (`AudioController::refreshSyncUi`).
+  While Sync measures: audition stopped, AUDIO controls and Start locked (`setSyncActive`,
+  `TopBar::setStartAllowed`); Sync is disabled while a batch or audition runs.
+- `App/SyncController` (SYNC section glue, runs, stores, status-bar messages, `--sync-check`).
+- Dev flags: `--sync-check`, `--sync-check-hardware`, `--sync-check-rates=`, `--sync-level=`,
+  `--virtual-reported-latency=`, `--settings-file=`, `--press-start` (`CommandLine.h`).
+- Tests: new category **`Sync`** (27 cases): signal shape and level; analysis exact at delays
+  1…40000 and with inverted polarity, rejects silence, pure noise, a constant and clipping;
+  combination (median, outlier → medium, 3 of 5 or weak ratio → low, unstable/clipped/silent/too
+  low/dropout failures); **LoopbackTestDevice** at 44.1/48/96 kHz, buffers 64…1024, round trips
+  101, 256, 812, 1029, 1480, 2565, 3128 and 60256 (driver hint lengthens the recording), exact and
+  high confidence; noise ±0.02 exact; loop gain -12 dB at level -6 exact; output level ignored and
+  restored; one dropout discarded (4/5, medium); cancel; clipped return rejected after one repeat;
+  silent return rejected after three; -78 dBFS return rejected as too low; noise-only return → no
+  clear peak; **wrong driver estimate** (claims 30, loop is 293): the measurement is stored, the
+  batch's choice picks it, the take is bit-exact, and with the estimate the take is the source
+  263 samples late (shown exactly); **SyncPlan** per-rate keys and lookups. `Settings`: sync level
+  default/clamp/garbage, five keys (rates, buffers, split devices, non-ASCII), overwrite, invalid
+  keys refused, garbage XML and ten broken entries ignored one by one. Loopback helpers moved to
+  `Tests/LoopbackRig.h`. 196 test cases, 1382 checks.
+
+Verification commands (repository root; `SP` = the session scratchpad with the phase 2 audio):
+
+```sh
+cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"   # no errors, no warnings from our code
+ctest --test-dir build --output-on-failure                       # 13/13 passed (196 cases, 1382 checks)
+APP="build/ReampForge_artefacts/Release/Reamp Forge.app/Contents/MacOS/Reamp Forge"
+# 1. Sync on the virtual loopback, three delays (isolated settings files): exit 0 each
+"$APP" --settings-file="$SP/p5/delay37.settings" --virtual-loopback=37 --output-channel=3 --input-channel=2 --sync-check
+#    5 x 293 smp, peak-to-sidelobe 43.7 dB, returned -12.0 dBFS; OK 293 smp · 6.10 ms, high; true round trip 293 -> exact
+#    --virtual-loopback=300: 556 smp · 11.6 ms exact; --virtual-loopback=1500: 1756 smp · 36.6 ms exact
+# 2. Sync at 48/44.1/96 kHz, then the batch in the same process, driver estimate wrong on purpose (100):
+"$APP" --settings-file="$SP/p5/batch.settings" --open="$SP/audio/Session A" --open="$SP/audio/Session B" \
+       --output-level=0 --output-channel=3 --input-channel=2 --virtual-loopback=300 --virtual-reported-latency=100 \
+       --virtual-speed=8 --sync-check --sync-check-rates=44100,96000 --batch-check="$SP/p5/out1"
+#    3 x 556 smp exact; 7/7 Done, no NC, "latency 556 smp measured", 6 bit-exact + Take 01 (32f source)
+#    -144.5 dBFS = 24-bit rounding; exit 0. Same batch without a measurement: 5/5 NC, "latency 100 smp
+#    estimated", content check FAIL (-1.9 to +0.5 dBFS error): the estimate misaligns, the measurement fixes it
+# 3. Acoustic, built-in speakers + microphone, sync level -30 dBFS (system volume 63 %):
+"$APP" --settings-file="$SP/p5/hw.settings" --device-type=CoreAudio --output-device="MacBook Pro Speakers" \
+       --input-device="MacBook Pro Microphone" --sync-check --sync-check-hardware --sync-level=-30
+#    repeats 3425, 3425, 3424, 3425, 3434 (inverted) smp; peak-to-sidelobe 16.2-17.2 dB; returned -17 to -20 dBFS
+#    OK 3425 smp · 71.4 ms, medium (4/5 within ±1); driver estimate 4828 smp; exit 0
+# 4. Snapshots
+"$APP" --settings-file="$SP/p5/snap.settings" --open="$SP/audio/Session A" --open="$SP/audio/Session B" --output-level=0 \
+       --output-channel=3 --input-channel=2 --virtual-loopback=300 --virtual-reported-latency=100 --virtual-speed=2 \
+       --sync-check --sync-check-rates=44100,96000 --batch-check="$SP/p5/out3" --sidebar-scroll=sync \
+       --snapshot="$PWD/docs/phase5.png"
+cp "$SP/p5/delay300.settings" "$SP/p5/dialog.settings"      # only 48 kHz measured
+"$APP" --settings-file="$SP/p5/dialog.settings" --open="$SP/audio/Session A" --open="$SP/audio/Session B" \
+       --virtual-loopback=300 --output-channel=3 --input-channel=2 --select="Riff 01.wav" --press-start \
+       --snapshot="$PWD/docs/phase5-dialog.png"             # lists 96 kHz and 44.1 kHz
+# 5. Real app, no flags, 6 s, quit via AppleScript: exit 0, devices listed, no errors
+```
+
+The owner's settings file was not touched by any check (all ran with `--settings-file`). The
+acoustic check played five 57 ms bursts at -30 dBFS through the speakers; nothing else was played.
+
+Deviations from the spec (phase 5):
+
+1. **The confirmation is an in-window overlay** (`ui::ConfirmDialog`, a child of the main
+   component with a dimmed backdrop), not a separate window: JUCE's `AlertWindow`/`DialogWindow`
+   are stock-styled desktop windows with an OS shadow. Return = Start anyway, Escape = Cancel.
+2. **"Prominent warning next to Start"** is the top-bar chip (NOT SYNCED in warn, directly left
+   of Start) plus the Start dialog and a warn status-bar line; no extra label was added.
+3. **Low-confidence measurements are stored** (shown in warn, status bar suggests measuring
+   again); only failures are refused. "Not repeatable" (fewer than 3 of 5 within ±1 sample) is a
+   failure.
+4. The run **stops early**: at the first clipped repeat, or after three failed repeats.
+5. **Polarity**: the peak of |correlation| is used, so an inverting loop still measures; the
+   inversion is reported, not treated as a failure.
+6. **Integer samples** only (no sub-sample interpolation): the take discards whole samples.
+7. During Sync the **output level is not applied** (engine gain 0 dB, restored): the sync level
+   is absolute dBFS. Range -60..0 dBFS.
+8. **Stop** during a measurement (the Sync button turns into Stop); nothing is stored.
+9. The key has no channels (as the spec's key); every output/input channel pair of a device
+   shares its measurement.
+10. The BatchController's per-rate lookup is unit-tested through the pure `SyncPlan` functions it
+    uses (BatchController itself needs the whole UI); end to end it is proven in the app by
+    `--sync-check --sync-check-rates` + `--batch-check` (three rates, every file measured).
+11. JUCE module `juce_dsp` added (for `juce::dsp::FFT`; part of JUCE, no new dependency).
+12. More development flags (list above), including `--settings-file`.
 
 ## Phase 4 — what was done (2026-10-01)
 
@@ -459,20 +580,33 @@ Deviations from the spec, all accepted:
   the channel-tag and tail fields, clicking Start / Pause / Resume / Skip / Stop, the new context
   menu items and the "Redo warnings" button, hovering status cells for the warning tooltip. The
   batch itself, including pause/resume/skip/stop, was driven programmatically
-  (`--batch-check`, `--batch-check-transport`), not by clicks.
+  (`--batch-check`, `--batch-check-transport`), not by clicks. Phase 5 adds: the Sync button and
+  Stop, the sync level slider, the Start anyway / Cancel buttons and Return/Escape in the dialog,
+  hovering the SYNC readouts and the chip for their tooltips. Sync and the dialog were driven
+  through `--sync-check` and `--press-start`, not by clicks.
 - **Phase 4 on real hardware**: one quiet 2 s batch on the built-in speakers + microphone
-  (exact length, sidecar log, NC warning). No interface with a real loop was available, so the
-  driver-latency estimate has not been compared with a measured round trip yet (phase 5).
-  The take recorded a peak of -5.8 dBFS from a -36 dBFS output: room/microphone level, not
-  checked further.
-- **No gap between files.** The next take starts as soon as the previous file is written, so a
-  long amp/reverb tail of file N can still be sounding while file N+1 starts (its first
-  `latency` samples are discarded, the rest is kept). Use the tail setting, or add a pause
-  between takes if that turns out to matter (not in the spec).
-- **"Subfolder next to source" output is scanned again** if the user later adds the source
-  folder with "Include subfolders" on: the Reamped files are listed as sources. Temp files are
-  hidden and the log is not audio, so only finished results show up. Consider skipping folders
-  named like the subfolder (not in the spec).
+  (exact length, sidecar log, NC warning). The take recorded a peak of -5.8 dBFS from a -36 dBFS
+  output: room/microphone level, not checked further.
+- **Sync on real hardware (phase 5)**: only acoustically, built-in speakers -> room -> built-in
+  microphone at -30 dBFS: 3425 smp (71.4 ms), medium confidence (4 of 5 within ±1; the fifth 3434
+  and inverted, a reflection), peak-to-sidelobe 16-17 dB, while the driver reports 3482 + 1346 =
+  4828 smp. So the CoreAudio estimate for this split pair is about 29 ms too long (it includes
+  safety offsets / the aggregate's buffering, not checked further). Split devices drift, so this
+  value is not stable across sessions; not measured twice. **No cabled interface loop (Apollo)
+  measured yet**: that is the first real test of Sync and of the high-confidence path on hardware.
+- Sync with ASIO / WASAPI never tested (Windows).
+- **No "measure all rates" action**: Sync measures the current configuration; the user switches the
+  rate and presses Sync again for each rate the files use (the Start dialog lists what is
+  missing). `--sync-check-rates` does it for checks. Ask the owner whether a button is wanted
+  (not in the spec).
+- Stored measurements are never pruned and cannot be deleted from the UI (a new measurement
+  replaces the old one for its key). Harmless; mention if it matters.
+- Files recorded with NC stay NC after the configuration is synced; "Reset status" re-queues
+  them ("Redo files with warnings" still excludes NC, see phase 4 deviation 5).
+- **No gap between files** (owner request 1 above, phase 6): the next take starts as soon as the
+  previous file is written, so an amp/reverb tail of file N can still sound while file N+1 starts.
+- **"Subfolder next to source" output is scanned again** (owner request 2 above, phase 6) if the
+  user later adds the source folder with "Include subfolders" on.
 - Resampled takes lose source content above about 0.447 of the lower rate (band-limiting). The
   synthetic test files have hard note cut-offs, so their resampled results differ from the raw
   source by -20 to -67 dBFS at those edges while matching the offline resampled reference to
@@ -481,7 +615,7 @@ Deviations from the spec, all accepted:
   sample each, same limit as the audition preview).
 - Gap detection uses wall-clock callback spacing; on a heavily loaded machine with tiny buffers
   scheduling jitter above about 0.75 buffer + 3 ms would be reported as a dropout (warning only).
-- When the open device disappears disappears the app stops and warns but does not switch back by itself
+- When the open device disappears the app stops and warns but does not switch back by itself
   when the device returns; pick it again (or restart).
 - Driver type switching on Windows: JUCE opens the new type's default devices for a moment
   (the callback is not forwarded to them). ASIO/WASAPI never tested.
@@ -514,3 +648,5 @@ Deviations from the spec, all accepted:
 - 2026-10-01: Own windowed-sinc `Resampler` for the record path (JUCE's interpolator: about
   -40 dB; ours: about -120 dB); also used for the audition preview.
 - 2026-10-01: Pause discards the current take and redoes the file on Resume.
+- 2026-10-01: Sync confirmation is an in-window themed overlay (no stock AlertWindow); low-
+  confidence measurements are stored, failures never.

@@ -47,6 +47,12 @@ namespace rf::app
             o.bufferSizes = { 64, 128, 256, 512, 1024 };
             o.loop = launch.virtualLoopbackDelay.has_value();
             o.delay = launch.virtualLoopbackDelay.value_or (0);
+
+            if (launch.virtualReportedLatency.has_value())
+            {
+                o.reportedInputLatency = *launch.virtualReportedLatency / 2;
+                o.reportedOutputLatency = *launch.virtualReportedLatency - *launch.virtualReportedLatency / 2;
+            }
             o.paced = true;
             o.speed = launch.virtualSpeed;
 
@@ -75,9 +81,12 @@ namespace rf::app
                                                                             topBar, statusBar, waveformPanel },
                                                    ! useVirtualDevice);
 
+        sync = std::make_unique<SyncController> (settings, *audio,
+                                                 SyncController::Views { sidebar.getSyncSection(), topBar, statusBar });
+
         outputOptions = std::make_unique<OutputOptions> (settings, sidebar.getDestinationSection(), sidebar.getOptionsSection());
         batch = std::make_unique<BatchController> (*audio, fileModel, *outputOptions,
-                                                   BatchController::Views { topBar, statusBar, waveformPanel, fileTree });
+                                                   BatchController::Views { topBar, statusBar, waveformPanel, fileTree, confirmDialog });
         batch->onFinished = [this] { fileTreeChanged(); };
 
         splitLayout.setItemLayout (1, metric::splitterSize, metric::splitterSize, metric::splitterSize);
@@ -85,6 +94,8 @@ namespace rf::app
         for (auto* c : std::initializer_list<juce::Component*> { &topBar, &fileTree, &splitter,
                                                                  &waveformPanel, &sidebar, &statusBar })
             addAndMakeVisible (c);
+
+        addChildComponent (confirmDialog);     // last: above everything when shown
 
         auto& includeSubfolders = sidebar.getOptionsSection().getIncludeSubfoldersToggle();
         includeSubfolders.setToggleState (settings.getIncludeSubfolders(), juce::dontSendNotification);
@@ -125,6 +136,7 @@ namespace rf::app
     {
         fileModel.removeListener (this);
         batch = nullptr;          // cancels a running take while the engine still exists
+        sync = nullptr;           // cancels a running measurement likewise
         outputOptions = nullptr;
         audio = nullptr;          // detaches the callback
         audioDevice = nullptr;
@@ -197,6 +209,9 @@ namespace rf::app
     {
         audio->openInitialDevice (options);
 
+        if (options.syncLevelDb.has_value())
+            sync->overrideLevel (*options.syncLevelDb);
+
         if (options.sidebarScroll.isNotEmpty())
             juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this), name = options.sidebarScroll]
             {
@@ -232,8 +247,42 @@ namespace rf::app
             if (options.batchCheckFolder.has_value())
                 batch->setCheckTransport (options.batchCheckTransport);
 
-            if (options.batchCheckFolder.has_value())
-                batch->runCheck (options.snapshotFile.has_value(), ! options.batchCheckHardware, onCheckDone);
+            auto runBatchCheck = [this, options] (std::function<void (bool)> done)
+            {
+                batch->runCheck (options.snapshotFile.has_value(), ! options.batchCheckHardware, std::move (done));
+            };
+
+            if (options.syncCheck)
+            {
+                // The virtual loopback knows its true round trip: the measurement must equal it.
+                std::function<int()> expected;
+
+                if (auto* loop = dynamic_cast<engine::LoopbackTestDevice*> (audioDevice.get()); loop != nullptr && options.virtualDevice)
+                    expected = [loop] { return loop->getRoundTripSamples(); };
+
+                sync->runCheck (options.syncCheckRates, expected, [options, onCheckDone, runBatchCheck] (bool syncOk)
+                {
+                    if (options.batchCheckFolder.has_value())
+                    {
+                        runBatchCheck ([syncOk, onCheckDone] (bool batchOk)
+                        {
+                            if (onCheckDone != nullptr)
+                                onCheckDone (syncOk && batchOk);
+                        });
+                    }
+                    else if (onCheckDone != nullptr)
+                    {
+                        onCheckDone (syncOk);
+                    }
+                });
+            }
+            else if (options.batchCheckFolder.has_value())
+            {
+                runBatchCheck (onCheckDone);
+            }
+
+            if (options.pressStart)
+                batch->start();
         };
 
         if (options.openPaths.isEmpty())
@@ -244,7 +293,8 @@ namespace rf::app
 
     bool MainComponent::isBusy() const
     {
-        return scanner.getNumPending() > 0 || waveformPanel.isLoading() || audio->isBusy() || batch->isWaitingForSnapshot();
+        return scanner.getNumPending() > 0 || waveformPanel.isLoading() || audio->isBusy() || sync->isBusy()
+            || batch->isWaitingForSnapshot();
     }
 
     void MainComponent::chooseFiles (bool folders)
@@ -334,6 +384,9 @@ namespace rf::app
     bool MainComponent::keyPressed (const juce::KeyPress& key)
     {
         // Reaches here when the focused component (usually the file list) does not use the key.
+        if (confirmDialog.isShowing())
+            return confirmDialog.keyPressed (key);
+
         if (key == juce::KeyPress::spaceKey)
         {
             audio->toggleAudition();
@@ -352,6 +405,8 @@ namespace rf::app
     void MainComponent::resized()
     {
         auto area = getLocalBounds();
+
+        confirmDialog.setBounds (area);
 
         topBar.setBounds (area.removeFromTop (metric::topBarHeight));
         statusBar.setBounds (area.removeFromBottom (metric::statusBarHeight));

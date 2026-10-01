@@ -113,9 +113,15 @@ namespace rf::ui
         explicit NoticeLine (juce::String text);
 
         void setText (const juce::String&);
+        const juce::String& getText() const noexcept   { return text; }
+
+        /** Badge and text colour: theme::colour::warn (default) or theme::colour::error. */
+        void setTone (juce::Colour);
+
         void paint (juce::Graphics&) override;
 
     private:
         juce::String text;
+        juce::Colour tone;
     };
 }

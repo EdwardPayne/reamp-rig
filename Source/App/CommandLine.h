@@ -69,6 +69,29 @@ namespace rf::app
                                    and 4 are Done and exact, 3 Skipped, 5 Queued, no temp files
         --sidebar-scroll=<name>    scroll the sidebar to a section (audio, sync, destination,
                                    options), e.g. to show DESTINATION in a snapshot
+
+        Sync (phase 5):
+        --sync-check               once the device is open (and the --open scans finished), run
+                                   Sync on the current configuration, print every repeat and the
+                                   result to stderr, store a passing measurement like the Sync
+                                   button does, and quit with exit code 0 if it passed (on the
+                                   virtual loopback: and equals the loop's true round trip).
+                                   Runs on the virtual loopback (--virtual-loopback=300 unless
+                                   given) unless --sync-check-hardware is added. Combined with
+                                   --batch-check, the batch check runs after it in the same
+                                   process. With --snapshot, the snapshot waits for both.
+        --sync-check-hardware      allow --sync-check on the selected real device
+        --sync-check-rates=<Hz,...> also measure these sample rates (the device is reopened at
+                                   each, as the batch does, and restored afterwards)
+        --sync-level=<dBFS>        sync test signal level for this run (-60..0, not saved)
+        --virtual-reported-latency=<n>  the virtual device reports a driver latency of n samples
+                                   (in n/2 + out the rest) instead of its true round trip: a
+                                   deliberately wrong estimate
+        --settings-file=<path>     use this settings file instead of the user's (isolates checks:
+                                   sync measurements made by --sync-check land there)
+        --press-start              press Start once the --open scans finished (shows the "Not
+                                   synced" confirmation when a configuration lacks a measurement;
+                                   for snapshots)
     */
     struct LaunchOptions
     {
@@ -93,6 +116,14 @@ namespace rf::app
         bool batchCheckHardware = false;
         bool batchCheckTransport = false;
         juce::String sidebarScroll;
+
+        bool syncCheck = false;
+        bool syncCheckHardware = false;
+        juce::Array<double> syncCheckRates;
+        std::optional<float> syncLevelDb;
+        std::optional<int> virtualReportedLatency;
+        std::optional<juce::File> settingsFile;
+        bool pressStart = false;
 
         static LaunchOptions parse (const juce::StringArray& args, const juce::File& workingDirectory);
     };

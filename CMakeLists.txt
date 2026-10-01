@@ -88,6 +88,7 @@ set(REAMPFORGE_ENGINE_SOURCES
     Source/Engine/LoopbackTestDevice.cpp
     Source/Engine/Resampler.cpp
     Source/Engine/SourceLoader.cpp
+    Source/Engine/SyncMeasurer.cpp
     Source/Engine/Take.cpp)
 
 #===============================================================================
@@ -113,6 +114,8 @@ target_sources(ReampForge PRIVATE
     Source/App/OutputOptions.cpp
     Source/App/Settings.cpp
     Source/App/Snapshot.cpp
+    Source/App/SyncController.cpp
+    Source/UI/ConfirmDialog.cpp
     Source/UI/Fonts.cpp
     Source/UI/LookAndFeel.cpp
     Source/UI/TopBar.cpp
@@ -154,6 +157,7 @@ target_link_libraries(ReampForge
         juce::juce_audio_devices
         juce::juce_audio_formats
         juce::juce_audio_utils
+        juce::juce_dsp
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
@@ -191,6 +195,7 @@ if(REAMPFORGE_BUILD_TESTS)
         Tests/TakeTests.cpp
         Tests/OutputNamingTests.cpp
         Tests/BatchQueueTests.cpp
+        Tests/SyncTests.cpp
         Source/App/Settings.cpp
         Source/UI/Fonts.cpp
         Source/UI/LookAndFeel.cpp
@@ -213,12 +218,13 @@ if(REAMPFORGE_BUILD_TESTS)
             juce::juce_audio_formats
             juce::juce_data_structures
             juce::juce_gui_basics
+            juce::juce_dsp
         PUBLIC
             juce::juce_recommended_config_flags
             juce::juce_recommended_warning_flags)
 
     foreach(_rf_category FolderScanner FileTree FileTreeView Settings DeviceSession DuplexEngine SourceLoader
-                         Resampler Loopback Take OutputNaming BatchQueue)
+                         Resampler Loopback Take OutputNaming BatchQueue Sync)
         add_test(NAME ${_rf_category}
                  COMMAND ReampForgeTests --category=${_rf_category})
     endforeach()

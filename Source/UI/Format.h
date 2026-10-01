@@ -59,6 +59,24 @@ namespace rf::ui::format
         return juce::String (n) + (n == 1 ? " file" : " files");
     }
 
+    /** "25.7 ms", "6.42 ms" (two decimals below 10 ms). */
+    inline juce::String milliseconds (double ms)
+    {
+        return juce::String (ms, std::abs (ms) < 10.0 ? 2 : 1) + " ms";
+    }
+
+    /** A round trip: "1234 smp · 25.7 ms". */
+    inline juce::String latency (int samples, double ms)
+    {
+        return juce::String (samples) + " smp" + juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 ")) + milliseconds (ms);
+    }
+
+    /** "2026-10-01 14:02" in local time, or "unknown" for a zero time. */
+    inline juce::String dateTime (const juce::Time& t)
+    {
+        return t.toMilliseconds() > 0 ? t.formatted ("%Y-%m-%d %H:%M") : juce::String ("unknown");
+    }
+
     /** Replaces the user's home directory with "~". */
     inline juce::String displayPath (const juce::File& f)
     {

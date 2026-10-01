@@ -82,6 +82,24 @@ namespace rf::app
                 options.batchCheckTransport = true;
             else if (optionValue (arg, "sidebar-scroll", value))
                 options.sidebarScroll = value;
+            else if (arg == "--sync-check")
+                options.syncCheck = true;
+            else if (arg == "--sync-check-hardware")
+                options.syncCheckHardware = true;
+            else if (optionValue (arg, "sync-check-rates", value))
+            {
+                for (const auto& r : juce::StringArray::fromTokens (value, ",", {}))
+                    if (r.getDoubleValue() > 0.0)
+                        options.syncCheckRates.add (r.getDoubleValue());
+            }
+            else if (optionValue (arg, "sync-level", value))
+                options.syncLevelDb = (float) value.getDoubleValue();
+            else if (optionValue (arg, "virtual-reported-latency", value))
+                options.virtualReportedLatency = juce::jmax (0, value.getIntValue());
+            else if (optionValue (arg, "settings-file", value) && value.isNotEmpty())
+                options.settingsFile = resolve (cwd, value);
+            else if (arg == "--press-start")
+                options.pressStart = true;
             else if (arg == "--audition-check")
                 options.auditionCheckSeconds = 2.0;
             else if (optionValue (arg, "audition-check", value))
@@ -91,8 +109,11 @@ namespace rf::app
                                                     value.fromFirstOccurrenceOf (":", false, false).getDoubleValue());
         }
 
-        // A batch check never touches the audio hardware unless explicitly allowed.
-        if (options.batchCheckFolder.has_value() && ! options.batchCheckHardware && ! options.virtualLoopbackDelay.has_value())
+        // A batch or sync check never touches the audio hardware unless explicitly allowed.
+        const auto hardwareAllowed = options.batchCheckHardware || options.syncCheckHardware;
+
+        if ((options.batchCheckFolder.has_value() || options.syncCheck) && ! hardwareAllowed
+            && ! options.virtualLoopbackDelay.has_value())
             options.virtualLoopbackDelay = 300;
 
         if (options.virtualLoopbackDelay.has_value())
